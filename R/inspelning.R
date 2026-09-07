@@ -46,7 +46,7 @@ stang_extra_flikar <- function(skrap) {
   egen_id <- skrap$session$driver$Target$getTargetInfo()$targetInfo$targetId
   alla <- skrap$session$driver$Target$getTargets()$targetInfos
   sidor <- Filter(function(t) identical(t$type, "page"), alla)
-
+  
   for (t in sidor) {
     if (!identical(t$targetId, egen_id)) {
       skrap$session$driver$Target$closeTarget(targetId = t$targetId)
@@ -91,7 +91,7 @@ injicera_inspelning <- function(skrap) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
   rlang::check_installed("jsonlite")
-
+  
   # Mallen används både i huvuddokumentet och (via eval i varje iframes
   # egna window) i same-origin-iframes. %IFRAME_SEL% ersätts vid körning
   # (i JS, inte via R:s sprintf) med antingen "null" eller en JSON-sträng
@@ -118,15 +118,25 @@ injicera_inspelning <- function(skrap) {
       }
 
       // Bygger en CSS-sökväg baserad på elementets position i DOM-trädet
-      // (t.ex. 'body > div:nth-of-type(2) > button:nth-of-type(1)'), som
-      // sista utväg för element utan id/klass/text att pålitligt matcha
-      // på. Bräcklig om sidans struktur ändras mellan inspelning och
-      // körning - används bara som fallback när inget bättre finns.
+      // (t.ex. '#innehall > div:nth-of-type(2) > button:nth-of-type(1)'),
+      // som sista utväg för element utan id/klass/text att pålitligt matcha
+      // på. Klättrar uppåt tills den hittar en FÖRÄLDER med ett id och
+      // ankrar där istället för vid <body> - moderna sidor saknar ofta id
+      // på det klickade elementet självt, men har nästan alltid ett
+      // längre upp (en sektion/container), vilket gör sökvägen mycket
+      // kortare och mindre bräcklig än att alltid räkna hela vägen från
+      // body. Hittas inget id alls blir det body-varianten som innan.
+      // OBS: kräver att id:t faktiskt är unikt på sidan (som HTML-specen
+      // egentligen kräver) - dubbletter av samma id ger fel träff.
       function sokvag(el) {
         if (!el || el.nodeType !== 1) return '';
         var delar = [];
         var cur = el;
         while (cur && cur.nodeType === 1 && cur !== document.body) {
+          if (cur.id) {
+            delar.unshift('#' + CSS.escape(cur.id));
+            return delar.join(' > ');
+          }
           var idx = 1, sib = cur;
           while ((sib = sib.previousElementSibling)) {
             if (sib.tagName === cur.tagName) idx++;
@@ -239,11 +249,11 @@ injicera_inspelning <- function(skrap) {
       return true;
     })();
   "
-
+  
   # 1. Injicera i huvuddokumentet (ingen iframe -> null)
   js_huvud <- sub("%IFRAME_SEL%", "null", mall, fixed = TRUE)
   kor_js(skrap, js_huvud)
-
+  
   # 2. Hitta alla iframes på sidan och injicera samma lyssnare i varje
   #    som går att nå (same-origin). Görs i en enda JS-körning: mallen
   #    skickas med som en textkonstant och eval:as inuti varje iframes
@@ -268,7 +278,7 @@ injicera_inspelning <- function(skrap) {
       return JSON.stringify(resultat);
     })();
   ", mall_json)
-
+  
   kor_js(skrap, js_iframes)
   invisible(TRUE)
 }
@@ -285,7 +295,7 @@ lasa_av_inspelning <- function(skrap) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
   rlang::check_installed(c("tibble", "purrr"), reason = "for att lasa av inspelningen")
-
+  
   js <- "
   (function() {
     var LAGERNYCKEL = '__skrap_inspelning__';
@@ -305,7 +315,7 @@ lasa_av_inspelning <- function(skrap) {
       href = character(), nedladdning = logical()
     ))
   }
-
+  
   handelser <- jsonlite::fromJSON(raw, simplifyDataFrame = FALSE)
   if (length(handelser) == 0) {
     return(tibble::tibble(
@@ -317,7 +327,7 @@ lasa_av_inspelning <- function(skrap) {
       href = character(), nedladdning = logical()
     ))
   }
-
+  
   purrr::map_dfr(handelser, function(h) {
     tibble::tibble(
       hantelse = h$hantelse %||% NA_character_,
@@ -397,13 +407,13 @@ generera_rad <- function(rad) {
     if (length(delar) == 0) return(NA_character_)
     paste(delar, collapse = " ")
   }
-
+  
   # Bygger ", iframe = \"...\"" om händelsen skedde i en iframe, annars "".
   iframe_arg <- function(iframe) {
     if (is.na(iframe) || !nzchar(iframe)) return("")
     sprintf(', iframe = "%s"', iframe)
   }
-
+  
   # Städar text/värden innan de läggs in i en JS-strängliteral (dubbla
   # citattecken) inuti kor_js()-fallbackerna.
   js_stad <- function(x) {
@@ -411,7 +421,7 @@ generera_rad <- function(rad) {
     x <- gsub("\\\\", "\\\\\\\\", x)
     gsub('"', '\\\\"', x)
   }
-
+  
   if (rad$hantelse == "click") {
     klass_stadad <- stad_klass(rad$klass)
     ifr <- iframe_arg(rad$iframe)
@@ -428,7 +438,7 @@ generera_rad <- function(rad) {
         )
       }
     }
-
+    
     # Prioritetsordning: id (alltid unikt per HTML-spec) - därefter den
     # SVAGASTE identifieraren som ändå faktiskt är unik på sidan, kollat
     # vid inspelningstillfället (text_antal/klass_text_antal). Är varken
@@ -461,7 +471,7 @@ generera_rad <- function(rad) {
       rad$iframe
     ))
   }
-
+  
   # select/input-ändringar: selenider::s() vet inte hur den ska gå ner i en
   # iframe (det stödet finns bara i de egna klicka_/kor_js-funktionerna),
   # så för händelser inuti en iframe genereras en kor_js()-baserad rad
@@ -493,7 +503,7 @@ generera_rad <- function(rad) {
       rad$vald_text
     ))
   }
-
+  
   if (rad$hantelse == "change") {
     if (!is.na(rad$iframe) && nzchar(rad$iframe)) {
       return(sprintf(
@@ -518,7 +528,7 @@ generera_rad <- function(rad) {
       rad$varde
     ))
   }
-
+  
   NA_character_
 }
 
@@ -539,19 +549,19 @@ generera_rad <- function(rad) {
 #' @return En sammanhängande textsträng med R-kod.
 #' @export
 generera_skript <- function(handelser, url = NULL,
-                             nedladdningsmapp = "C:/temp/nedladdningar") {
+                            nedladdningsmapp = "C:/temp/nedladdningar") {
   if (nrow(handelser) == 0) {
     return("# Inga händelser inspelade ännu.")
   }
   rlang::check_installed("purrr", reason = "for att generera skriptet")
-
+  
   # Numrerar nedladdningarna i den ordning de spelades in (1, 2, 3, ...),
   # så flera nedladdningar i samma inspelning får unika variabelnamn
   # (fil_1, fil_2, ...) i det genererade skriptet.
   handelser$nedladdning_nr <- cumsum(
     handelser$hantelse == "click" & handelser$nedladdning
   )
-
+  
   rad_till_kod <- function(rad) {
     uttryck <- generera_rad(rad)
     if (is.na(uttryck)) return(NA_character_)
@@ -567,12 +577,12 @@ generera_skript <- function(handelser, url = NULL,
       rad$nedladdning_nr, gsub("\n", "\n    ", uttryck), lank
     )
   }
-
+  
   rader <- purrr::map_chr(purrr::transpose(handelser), rad_till_kod)
   rader <- rader[!is.na(rader)]
-
+  
   har_nedladdningar <- any(handelser$nedladdning, na.rm = TRUE)
-
+  
   huvud <- c(
     "# Automatiskt genererat utkast. klicka_via_*()-anropen väntar redan in",
     "# element internt (vanta = TRUE), och kor_js()-reservlägena pollar via",
@@ -588,7 +598,7 @@ generera_skript <- function(handelser, url = NULL,
     ),
     ""
   )
-
+  
   paste(c(huvud, rader, "", "stang_skrapsession(skrap)"), collapse = "\n")
 }
 
@@ -601,17 +611,28 @@ generera_skript <- function(handelser, url = NULL,
 #' 500:e ms läser av nya händelser och uppdaterar en live-logg samt det
 #' genererade skriptet.
 #'
+#' När du trycker **Done** skrivs det genererade skriptet ut i konsolen med
+#' `cat()`, och kopieras till urklipp (kräver paketet `clipr` - saknas det,
+#' eller är urklipp otillgängligt i miljön, skrivs bara ett meddelande om
+#' det istället, skriptet skrivs ut ändå).
+#'
 #' @param url Valfri adress att öppna direkt vid start.
 #' @param nedladdningsmapp Läggs in i det genererade skriptets huvud som
 #'   `nedladdningsmapp <- ...`, om minst en nedladdning spelas in.
 #' @param ... Vidarebefordras till starta_skrapsession() (t.ex. browser_path).
+#'
+#' @examples
+#' \dontrun{
+#' skript <- kor_inspelningsgadget(url = "https://exempel.se/formular")
+#' cat(skript)
+#' }
 #' @export
 kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedladdningar", ...) {
   rlang::check_installed(
     c("shiny", "miniUI", "dplyr", "tibble", "purrr"),
     reason = "for att kora inspelningsgadgeten (kor_inspelningsgadget())"
   )
-
+  
   ui <- miniUI::miniPage(
     miniUI::gadgetTitleBar("Skrapinspelning"),
     miniUI::miniTabstripPanel(
@@ -620,7 +641,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
         miniUI::miniContentPanel(
           shiny::actionButton("stoppa_inspelning", "Pausa/återuppta inspelning"),
           shiny::textOutput("status_rad"),
-          shiny::tableOutput("logg_tabell")
+          shiny::uiOutput("logg_tabell")
         )
       ),
       miniUI::miniTabPanel(
@@ -631,9 +652,9 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
       )
     )
   )
-
+  
   server <- function(input, output, session) {
-
+    
     skrap <- starta_skrapsession(headless = FALSE, view = FALSE, ...)
     tryCatch(stang_extra_flikar(skrap), error = function(e) {
       message("[inspelning] kunde inte stänga extra-flik: ", conditionMessage(e))
@@ -642,7 +663,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
       selenider::open_url(url, session = skrap$session)
     }
     injicera_inspelning(skrap)
-
+    
     pausad <- shiny::reactiveVal(FALSE)
     senaste_fel <- shiny::reactiveVal(NULL)
     handelser <- shiny::reactiveVal(
@@ -655,16 +676,16 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
         href = character(), nedladdning = logical()
       )
     )
-
+    
     shiny::observeEvent(input$stoppa_inspelning, {
       pausad(!pausad())
     })
-
+    
     timer <- shiny::reactiveTimer(500)
     shiny::observe({
       timer()
       if (isTRUE(pausad())) return()
-
+      
       # Återinjicera vid varje tick - idempotent, och avgörande efter en
       # sidladdning (t.ex. cookiebanner-val som gör en full reload), då
       # webbläsarens JS-kontext nollställs och lyssnaren från förra sidan
@@ -679,7 +700,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
           message("[inspelning] injicera_inspelning fel: ", conditionMessage(e))
         }
       )
-
+      
       nya <- tryCatch(
         lasa_av_inspelning(skrap),
         error = function(e) {
@@ -692,24 +713,73 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
         handelser(dplyr::bind_rows(handelser(), nya))
       }
     })
-
+    
     output$status_rad <- shiny::renderText({
       fel <- senaste_fel()
       if (is.null(fel)) "Status: OK" else paste("Status: senaste fel -", fel)
     })
-
-    output$logg_tabell <- shiny::renderTable({
-      handelser() |>
+    
+    output$logg_tabell <- shiny::renderUI({
+      df <- handelser() |>
         dplyr::select(hantelse, tag, id, klass, text, vald_text, varde, iframe, sokvag)
+      if (nrow(df) == 0) return(shiny::tags$em("Inga händelser inspelade ännu."))
+      
+      kolumner <- names(df)
+      cell_stil <- paste(
+        "white-space: nowrap; overflow: hidden; text-overflow: ellipsis;",
+        "max-width: 220px; display: block;"
+      )
+      
+      rubrikrad <- shiny::tags$tr(
+        lapply(kolumner, function(k) {
+          shiny::tags$th(
+            k,
+            style = "text-align: left; padding: 4px 8px; border-bottom: 2px solid #ccc; white-space: nowrap;"
+          )
+        })
+      )
+      datarader <- lapply(seq_len(nrow(df)), function(i) {
+        shiny::tags$tr(
+          lapply(kolumner, function(k) {
+            varde_i <- df[[k]][i]
+            varde_txt <- if (is.na(varde_i)) "" else as.character(varde_i)
+            shiny::tags$td(
+              style = "padding: 4px 8px; border-bottom: 1px solid #eee; max-width: 220px;",
+              shiny::tags$div(varde_txt, title = varde_txt, style = cell_stil)
+            )
+          })
+        )
+      })
+      
+      shiny::tags$table(
+        style = "width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px;",
+        shiny::tags$thead(rubrikrad),
+        shiny::tags$tbody(datarader)
+      )
     })
-
+    
     output$kod_output <- shiny::renderText({
       generera_skript(handelser(), url = url, nedladdningsmapp = nedladdningsmapp)
     })
-
+    
     shiny::observeEvent(input$done, {
       stang_skrapsession(skrap)
-      shiny::stopApp(generera_skript(handelser(), url = url, nedladdningsmapp = nedladdningsmapp))
+      skript <- generera_skript(handelser(), url = url, nedladdningsmapp = nedladdningsmapp)
+      
+      cat(skript, "\n")
+      
+      if (rlang::is_installed("clipr") && clipr::clipr_available()) {
+        clipr::write_clip(skript)
+        message("Skriptet ovan är kopierat till urklipp.")
+      } else {
+        message(
+          "Skriptet ovan kunde INTE kopieras till urklipp (paketet 'clipr' ",
+          "saknas eller urklipp är otillgängligt i den här miljön) - kopiera ",
+          "manuellt från konsolen ovan."
+        )
+      }
+      
+      shiny::stopApp(skript)
     })
     shiny::observeEvent(input$cancel, {
       stang_skrapsession(skrap)
@@ -719,12 +789,6 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
       tryCatch(stang_skrapsession(skrap), error = function(e) NULL)
     })
   }
-
+  
   shiny::runGadget(ui, server, viewer = shiny::paneViewer())
 }
-
-# --- Exempel -----------------------------------------------------------
-# source("https://raw.githubusercontent.com/.../func_webbskrapning.R")
-# source("skrap_recorder.R")
-# skript <- kor_inspelningsgadget(url = "https://exempel.se/formular")
-# cat(skript)

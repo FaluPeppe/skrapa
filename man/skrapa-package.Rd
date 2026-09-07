@@ -24,6 +24,14 @@ Utvecklarverktyg - shiny/miniUI/dplyr/tibble/purrr ligger i Suggests,
 inte Imports, eftersom vanliga skrapskript (som bara använder
 funktionerna i skrapning.R) inte ska behöva dra in dem.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/FaluPeppe/skrapa}
+  \item Report bugs at \url{https://github.com/FaluPeppe/skrapa/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: Peter Efternamn \email{peter@example.se}
 

@@ -24,3 +24,15 @@ en liten kontrollpanel (miniUI-gadget) med en pollningstimer som var
 500:e ms läser av nya händelser och uppdaterar en live-logg samt det
 genererade skriptet.
 }
+\details{
+När du trycker \strong{Done} skrivs det genererade skriptet ut i konsolen med
+\code{cat()}, och kopieras till urklipp (kräver paketet \code{clipr} - saknas det,
+eller är urklipp otillgängligt i miljön, skrivs bara ett meddelande om
+det istället, skriptet skrivs ut ändå).
+}
+\examples{
+\dontrun{
+skript <- kor_inspelningsgadget(url = "https://exempel.se/formular")
+cat(skript)
+}
+}
