@@ -1,0 +1,33 @@
+Package: skrapa
+Title: Verktyg för webbskrapning med chromote/selenider
+Version: 0.1.0
+Authors@R:
+    person("Peter", "Efternamn", email = "peter@example.se", role = c("aut", "cre"))
+Description: Samlade funktioner för att bygga och köra webbskrapningsskript
+    mot Chromium-baserade webbläsare (Edge/Chrome) via chromote och
+    selenider - klick, formulärifyllning, nedladdningar, väntehantering med
+    mera - samt ett interaktivt Shiny-gadget som spelar in klick och
+    formulärval i en synlig webbläsarsession och genererar motsvarande
+    R-kod utifrån dessa funktioner.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Imports:
+    chromote,
+    httpuv,
+    httr,
+    jsonlite,
+    processx,
+    rlang,
+    selenider,
+    stats,
+    utils
+Suggests:
+    dplyr,
+    miniUI,
+    purrr,
+    shiny,
+    tibble,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+Config/roxygen2/version: 8.1.0

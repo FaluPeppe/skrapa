@@ -1,0 +1,1666 @@
+#' Hitta en installerad Chromium-baserad webbläsare (Edge eller Chrome)
+#'
+#' Letar igenom kända installationsplatser för Microsoft Edge och Google
+#' Chrome på Windows, och faller tillbaka på Windows-registret. Gör att
+#' lösningen fungerar utan konfiguration på fler maskiner - oavsett om
+#' webbläsaren ligger under "Program Files" eller "Program Files (x86)",
+#' och oavsett om det är Edge eller Chrome som finns.
+#'
+#' Ordning: miljövariabeln SKRAP_EDGE_PATH (om satt) har alltid företräde,
+#' därefter Edge före Chrome, 64-bit före 32-bit.
+#'
+#' @return Sökvägen till första funna webbläsaren, eller NULL om ingen hittas.
+#' @export
+hitta_webblasare <- function() {
+  # 1. Uttrycklig miljövariabel vinner alltid
+  fran_env <- Sys.getenv("SKRAP_EDGE_PATH", "")
+  if (nzchar(fran_env) && file.exists(fran_env)) {
+    return(fran_env)
+  }
+  
+  # 2. Kända sökvägar, Edge fore Chrome
+  pf    <- Sys.getenv("PROGRAMFILES", "C:/Program Files")
+  pf86  <- Sys.getenv("PROGRAMFILES(X86)", "C:/Program Files (x86)")
+  lokal <- Sys.getenv("LOCALAPPDATA", "")
+  
+  kandidater <- c(
+    file.path(pf86, "Microsoft/Edge/Application/msedge.exe"),
+    file.path(pf,   "Microsoft/Edge/Application/msedge.exe"),
+    file.path(pf,   "Google/Chrome/Application/chrome.exe"),
+    file.path(pf86, "Google/Chrome/Application/chrome.exe"),
+    if (nzchar(lokal)) file.path(lokal, "Google/Chrome/Application/chrome.exe")
+  )
+  kandidater <- gsub("\\\\", "/", kandidater)
+  
+  for (k in kandidater) {
+    if (file.exists(k)) return(k)
+  }
+  
+  # 3. Windows-registret som sista utväg (App Paths)
+  reg_sok <- function(exe) {
+    nyckel <- paste0(
+      "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\", exe
+    )
+    varde <- tryCatch(
+      utils::readRegistry(nyckel, hive = "HLM", maxdepth = 1)[["(Default)"]],
+      error = function(e) NULL
+    )
+    if (!is.null(varde) && file.exists(varde)) gsub("\\\\", "/", varde) else NULL
+  }
+  for (exe in c("msedge.exe", "chrome.exe")) {
+    traff <- reg_sok(exe)
+    if (!is.null(traff)) return(traff)
+  }
+  
+  NULL
+}
+
+#' Testa om miljön klarar av att köra en skrapsession
+#'
+#' Kör igenom förutsättningarna i tur och ordning och skriver ut ett
+#' begripligt besked om exakt var det eventuellt brister - tänkt att köras
+#' först av en ny användare, så att man ser om det är paketinstallation,
+#' webbläsarsökväg, AppLocker eller nätverk som stoppar, istället för att
+#' fastna i kryptiska felmeddelanden.
+#'
+#' Testerna, i ordning:
+#' 1. Att det finns internetanslutning (raw.githubusercontent.com nås).
+#' 2. Att de nödvändiga R-paketen är installerade.
+#' 3. Att Edge hittas på förväntad (eller angiven) sökväg.
+#' 4. Att processx kan starta Edge med en debug-port (fångar AppLocker-
+#'    blockering av själva webbläsarstarten).
+#' 5. Att debug-porten svarar på 127.0.0.1 (fångar loopback-/brandvägg).
+#' 6. Att chromote kan ansluta hela vägen och skapa en session.
+#'
+#' @param browser_path Sökväg till msedge.exe. Default som i
+#'   starta_skrapsession() (miljövariabeln SKRAP_EDGE_PATH eller
+#'   standardsökvägen).
+#'
+#' @return Osynligt TRUE om alla tester gick igenom, annars FALSE. Skriver
+#'   löpande ut resultatet av varje steg.
+#'
+#' @examples
+#' \dontrun{
+#' testa_skrapmiljo()
+#' }
+#' @export
+testa_skrapmiljo <- function(browser_path = NULL) {
+  
+  ok_rad  <- function(txt) message("  [OK]    ", txt)
+  fel_rad <- function(txt) message("  [FEL]   ", txt)
+  info_rad <- function(txt) message("          ", txt)
+  
+  message("Testar forutsattningar for skrapsession ...\n")
+  
+  # --- 1. Internetanslutning -------------------------------------------------
+  if (!test_internetanslutning()) {
+    fel_rad("Ingen internetanslutning kunde upptackas.")
+    info_rad("Nadde inte raw.githubusercontent.com. Kontrollera natverkskabel/")
+    info_rad("wifi, VPN och brandvagg/proxy, och forsok igen.")
+    return(invisible(FALSE))
+  }
+  ok_rad("Internetuppkoppling fungerar.")
+  
+  # --- 2. R-paket -----------------------------------------------------------
+  noodvandiga <- c("chromote", "selenider", "processx", "httr", "jsonlite", "httpuv")
+  saknade <- noodvandiga[!vapply(noodvandiga, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(saknade)) {
+    fel_rad(paste0("Foljande R-paket saknas: ", paste(saknade, collapse = ", ")))
+    info_rad(paste0("Installera med: install.packages(c(",
+                    paste0('\"', saknade, '\"', collapse = ", "), "))"))
+    info_rad("Gar inte det: kontrollera atkomst till CRAN (proxy?) och att")
+    info_rad("kompilering tillats (Rtools). Avbryter har.")
+    return(invisible(FALSE))
+  }
+  ok_rad("Alla nodvandiga R-paket ar installerade.")
+  
+  # --- 3. Webblasare hittas -------------------------------------------------
+  if (is.null(browser_path)) {
+    browser_path <- hitta_webblasare()
+  }
+  if (is.null(browser_path) || !file.exists(browser_path)) {
+    fel_rad("Hittar ingen Chromium-baserad webblasare (Edge eller Chrome).")
+    info_rad("Ange ratt sokvag via SKRAP_EDGE_PATH i .Renviron, t.ex.:")
+    info_rad('  SKRAP_EDGE_PATH=C:/Program Files/Microsoft/Edge/Application/msedge.exe')
+    return(invisible(FALSE))
+  }
+  ok_rad(paste0("Webblasare hittad: ", browser_path))
+  
+  # --- 4. Starta Edge med debug-port (fangar AppLocker) --------------------
+  port <- httpuv::randomPort(min = 9222, max = 9999, host = "127.0.0.1")
+  profil_dir <- tempfile("edge-testprofil-")
+  dir.create(profil_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  proc <- tryCatch(
+    processx::process$new(
+      command = browser_path,
+      args = c("--headless", paste0("--remote-debugging-port=", port),
+               paste0("--user-data-dir=", profil_dir),
+               "--no-first-run", "--no-default-browser-check"),
+      supervise = FALSE
+    ),
+    error = function(e) e
+  )
+  if (inherits(proc, "error")) {
+    fel_rad("Kunde inte starta Edge-processen.")
+    if (grepl("1260|grupprincip|blocked", conditionMessage(proc), ignore.case = TRUE)) {
+      info_rad("Felet tyder pa AppLocker/gruppolicy (felkod 1260) - starten av")
+      info_rad("webblasaren blockeras. Kontakta IT om vitlistning, eller testa")
+      info_rad("om en annan Edge-sokvag under Program Files ar tillaten.")
+    } else {
+      info_rad(paste0("Felmeddelande: ", conditionMessage(proc)))
+    }
+    unlink(profil_dir, recursive = TRUE, force = TRUE)
+    return(invisible(FALSE))
+  }
+  ok_rad("Edge-processen startade.")
+  
+  # Stad upp oavsett hur resten gar
+  on.exit({
+    if (proc$is_alive()) proc$kill()
+    unlink(profil_dir, recursive = TRUE, force = TRUE)
+  }, add = TRUE)
+  
+  # --- 5. Debug-porten svarar pa 127.0.0.1 (fangar loopback/brandvagg) -----
+  url <- sprintf("http://127.0.0.1:%d/json/version", port)
+  svarat <- FALSE
+  for (i in 1:20) {
+    if (!proc$is_alive()) {
+      fel_rad("Edge avslutades ovantat direkt efter start.")
+      info_rad("Kan tyda pa att en policy stanger webblasaren, eller att")
+      info_rad("debug-porten ar sparrad. Kontakta IT.")
+      return(invisible(FALSE))
+    }
+    svarat <- tryCatch({ httr::GET(url, httr::timeout(1)); TRUE },
+                       error = function(e) FALSE)
+    if (svarat) break
+    Sys.sleep(0.5)
+  }
+  if (!svarat) {
+    fel_rad(paste0("Debug-porten ", port, " svarade inte pa 127.0.0.1."))
+    info_rad("Edge kor, men gar inte att na via loopback. Kan bero pa en")
+    info_rad("brandvagg eller EDR-produkt som blockerar lokal trafik. Kontakta IT.")
+    return(invisible(FALSE))
+  }
+  ok_rad("Debug-porten svarar pa 127.0.0.1.")
+  
+  # --- 6. chromote ansluter hela vagen -------------------------------------
+  anslutning <- tryCatch({
+    b <- chromote::ChromeRemote$new(host = "127.0.0.1", port = port)
+    chrom <- chromote::Chromote$new(browser = b)
+    sess <- chrom$new_session()
+    sess$close()
+    chrom$close()
+    TRUE
+  }, error = function(e) e)
+  
+  if (inherits(anslutning, "error")) {
+    fel_rad("chromote kunde inte ansluta hela vagen.")
+    info_rad(paste0("Felmeddelande: ", conditionMessage(anslutning)))
+    return(invisible(FALSE))
+  }
+  ok_rad("chromote anslot och kunde skapa en session.")
+  
+  message("\nAlla tester gick igenom - miljon klarar av att kora en skrapsession.")
+  invisible(TRUE)
+}
+
+#' Testa internetanslutning via en riktig HTTP-förfrågan
+#'
+#' Testar med httr (som respekterar systemets/proxyns inställningar),
+#' INTE curl::has_internet() - den gör en DNS-uppslagning mot en extern
+#' publik DNS-server (t.ex. 8.8.8.8), vilket ofta är blockerat på
+#' företagsnät även när vanlig webbtrafik via proxy fungerar fint. Det ger
+#' falska "ingen anslutning"-larm. Default-URL:en (raw.githubusercontent.com)
+#' är samma domän som func_webbskrapning.R själv laddas från, så om den
+#' inte går att nå hade ändå ingenting fungerat.
+#'
+#' @param url URL att testa mot.
+#' @param timeout_sek Max antal sekunder att vänta på svar.
+#'
+#' @return TRUE/FALSE.
+#' @export
+test_internetanslutning <- function(url = "https://raw.githubusercontent.com", timeout_sek = 5) {
+  tryCatch({
+    svar <- httr::GET(url, httr::timeout(timeout_sek))
+    httr::status_code(svar) < 500
+  }, error = function(e) FALSE)
+}
+
+#' Starta en skrapsession (Edge + chromote + selenider)
+#'
+#' Startar Microsoft Edge headless med en fjärrfelsökningsport, ansluter
+#' chromote till den via 127.0.0.1 (INTE localhost, som kan lösas till ::1
+#' och göra att chromote timar ut trots att Edge svarar), och kopplar
+#' selenider till samma session.
+#'
+#' Edge startas med processx::process$new(..., supervise = FALSE) istället
+#' för chromotes/shell()s egna processtart, eftersom processx annars
+#' spawnar en hjälpprocess (supervisor.exe) som ofta blockeras av
+#' AppLocker/gruppolicy på företagsdatorer. supervise = FALSE undviker det
+#' helt, samtidigt som vi får ett processobjekt med $get_pid()/$kill() att
+#' städa bort sessionen med senare.
+#'
+#' @param port Fjärrfelsökningsport för Edge. Default NULL, vilket väljer en
+#'   ledig port automatiskt (kräver paketet httpuv). Ange ett fast
+#'   portnummer bara om du har ett särskilt behov av det.
+#' @param headless Kör Edge utan synligt fönster. Default TRUE.
+#' @param browser_path Sökväg till msedge.exe eller chrome.exe. Default
+#'   NULL, vilket söker upp Edge eller Chrome automatiskt via
+#'   hitta_webblasare() (kända sökvägar + Windows-registret).
+#'   Miljövariabeln SKRAP_EDGE_PATH har företräde om den är satt.
+#' @param profil_dir Mapp för Edges temporära användarprofil. Default en
+#'   unik temp-mapp per session (så flera sessioner kan köras parallellt).
+#' @param timeout Antal sekunder att vänta på att debug-porten svarar.
+#' @param view Om chromote ska visa webbläsarfönstret (kräver headless = FALSE
+#'   för att synas). Default FALSE.
+#' @param bredd Viewportens bredd i pixlar. chromote tvingar fram en fast
+#'   virtuell skärmstorlek via Chrome DevTools-protokollet oberoende av det
+#'   faktiska OS-fönstrets storlek - höj den här om sidan bara syns i en
+#'   smal kolumn trots ett maximerat fönster.
+#' @param hojd Viewportens höjd i pixlar.
+#' @param user_agent Valfri user agent-sträng. I headless-läge innehåller
+#'   standard-UA:n "HeadlessChrome", vilket enkla botskydd känner igen -
+#'   ange en vanlig webbläsar-UA här för att undvika det.
+#'
+#' @return Ett objekt av klass "skrapsession" med fälten session (selenider-
+#'   session), chrom (Chromote-objekt), process (processx-processobjekt),
+#'   profil_dir och port. Skicka objektet till stang_skrapsession() när du
+#'   är klar.
+#'
+#' @examples
+#' \dontrun{
+#' skrap <- starta_skrapsession()
+#' on.exit(stang_skrapsession(skrap), add = TRUE)
+#'
+#' selenider::open_url(skrap$session, "https://www.regiondalarna.se")
+#' }
+#' @export
+starta_skrapsession <- function(port = NULL,
+                                headless = TRUE,
+                                browser_path = NULL,
+                                profil_dir = tempfile("edge-profil-"),
+                                timeout = 15,
+                                view = FALSE,
+                                bredd = 1600,
+                                hojd = 1000,
+                                user_agent = NULL) {
+  
+  # Kolla internetanslutning forst - ger ett tydligt fel direkt istallet for
+  # att spendera flera sekunder pa att starta Edge/chromote i onodan, for
+  # att sedan fastna med ett kryptiskt timeout-fel langre in i skrapningen.
+  if (!test_internetanslutning()) {
+    stop(
+      "Ingen internetanslutning kunde upptäckas (nådde inte ",
+      "raw.githubusercontent.com).\n",
+      "Kontrollera nätverkskabel/wifi, VPN och brandvägg/proxy, och försök igen.\n",
+      "Kor testa_skrapmiljo() for en steg-for-steg-diagnos av övriga ",
+      "förutsättningar (webbläsare, portar, chromote)."
+    )
+  }
+  
+  # Leta upp Edge/Chrome automatiskt om ingen sokvag angetts uttryckligen
+  if (is.null(browser_path)) {
+    browser_path <- hitta_webblasare()
+  }
+  if (is.null(browser_path) || !file.exists(browser_path)) {
+    stop(
+      "Hittar ingen Chromium-baserad webblasare (Edge eller Chrome).\n",
+      "Ange sokvagen via argumentet browser_path, eller satt miljovariabeln ",
+      "SKRAP_EDGE_PATH i .Renviron.\n",
+      "Kor testa_skrapmiljo() for en steg-for-steg-diagnos."
+    )
+  }
+  
+  # Valj en ledig port automatiskt om ingen port angetts. Detta undviker att
+  # av misstag ansluta till en gammal, kvarglomd Edge-process pa samma port
+  # (vilket ger kryptiska fel som "Session and underlying target have been
+  # closed"), och gor det ocksa mojligt att kora flera sessioner parallellt.
+  if (is.null(port)) {
+    rlang::check_installed("httpuv", reason = "for att valja en ledig port automatiskt")
+    port <- httpuv::randomPort(min = 9222, max = 9999, host = "127.0.0.1")
+  }
+  
+  dir.create(profil_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  args <- c(
+    if (isTRUE(headless)) "--headless" else "--start-maximized",
+    paste0("--remote-debugging-port=", port),
+    paste0("--user-data-dir=", profil_dir),
+    "--no-first-run",
+    "--no-default-browser-check",
+    # Headless-laget avslojar sig sjalvt via "HeadlessChrome" i user
+    # agent-strangen - den vanligaste signalen enkla botskydd tittar pa.
+    # Med user_agent kan en vanlig UA-strang sattas aven i headless-lage.
+    if (!is.null(user_agent)) paste0("--user-agent=", user_agent)
+  )
+  
+  # supervise = FALSE ar avgorande: undviker processx supervisor.exe
+  proc <- processx::process$new(
+    command = browser_path,
+    args = args,
+    supervise = FALSE
+  )
+  
+  # Vanta tills Edges debug-port svarar (eller processen dor)
+  url <- sprintf("http://127.0.0.1:%d/json/version", port)
+  ok <- FALSE
+  forsok <- max(1L, ceiling(timeout * 2))
+  for (i in seq_len(forsok)) {
+    if (!proc$is_alive()) {
+      stop(
+        "Edge avslutades ovantat vid start. Kontrollera sokvag, ",
+        "rattigheter och att porten ", port, " inte redan ar upptagen."
+      )
+    }
+    ok <- tryCatch(
+      {
+        httr::GET(url, httr::timeout(1))
+        TRUE
+      },
+      error = function(e) FALSE
+    )
+    if (ok) break
+    Sys.sleep(0.5)
+  }
+  
+  if (!ok) {
+    proc$kill()
+    unlink(profil_dir, recursive = TRUE, force = TRUE)
+    stop("Edge svarade inte pa debug-porten inom ", timeout, " sekunder.")
+  }
+  
+  b <- chromote::ChromeRemote$new(host = "127.0.0.1", port = port)
+  chrom <- chromote::Chromote$new(browser = b)
+  
+  session <- selenider::selenider_session(
+    options = selenider::chromote_options(parent = chrom, width = bredd, height = hojd),
+    view = view,
+    local = FALSE
+  )
+  
+  structure(
+    list(
+      session = session,
+      chrom = chrom,
+      process = proc,
+      profil_dir = profil_dir,
+      port = port
+    ),
+    class = "skrapsession"
+  )
+}
+
+#' Stäng en skrapsession och städa bort allt den skapade
+#'
+#' Stänger selenider-sessionen och chromote-anslutningen, avslutar
+#' Edge-processen (bara den specifika process som starta_skrapsession()
+#' startade, inte andra Edge-fönster som redan kör på datorn), och tar
+#' bort den temporära profilmappen.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#'
+#' @export
+stang_skrapsession <- function(skrap) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  
+  message("Stänger skrapsessionen. En rad i stil med ",
+          "'handle_read_frame error ... anslutningen tvingades stänga' ",
+          "kan visas här - det är ofarligt och betyder bara att ",
+          "webbläsarprocessen stängdes innan anslutningen hann kopplas ner snyggt.")
+  
+  # Stang i ratt ordning: selenider -> chromote -> sjalva Edge-processen.
+  # Websocket-lagret under chromote loggar annars en ofarlig
+  # "handle_read_frame error ... 10054"-rad om Edge-processen doodas innan
+  # anslutningen hunnit koppla ned snyggt. Vi ger nedkopplingen en kort
+  # respit och fangar stderr under tiden for att halla utskriften borta.
+  # (Utskriften kommer fran ett C++-bibliotek, inte som ett R-warning, sa
+  # suppressWarnings() biter inte - darfor sink() pa stderr.)
+  tyst <- function(expr) {
+    tmp <- tempfile()
+    con <- file(tmp, open = "wt")
+    sink(con, type = "message")
+    on.exit({
+      sink(type = "message")
+      close(con)
+      unlink(tmp)
+    }, add = TRUE)
+    try(expr, silent = TRUE)
+  }
+  
+  tyst({
+    selenider::close_session(skrap$session)
+    skrap$chrom$close()
+    Sys.sleep(0.5)  # lat websocket-nedkopplingen slutforas
+  })
+  
+  if (!is.null(skrap$process) && skrap$process$is_alive()) {
+    skrap$process$kill()
+  }
+  
+  if (dir.exists(skrap$profil_dir)) {
+    unlink(skrap$profil_dir, recursive = TRUE, force = TRUE)
+  }
+  
+  invisible(TRUE)
+}
+
+#' Bygg JavaScript som pekar in i en (eventuellt nästlad) iframe
+#'
+#' Genererar en JS-kodsnutt som sätter variabeln `dok` till huvudsidans
+#' `document` (om `iframe` är NULL), eller dokumentet inuti angiven iframe
+#' (eller nästlade iframes, om en vektor av selektorer anges). Fungerar
+#' bara för same-origin-iframes - cross-origin blockeras av webbläsarens
+#' säkerhetsmodell och signaleras med en sträng som `kontrollera_iframe_svar()`
+#' tolkar till ett begripligt R-fel.
+#'
+#' @param iframe NULL (default, huvuddokumentet), en CSS-selektor till en
+#'   iframe, eller en character-vektor av selektorer för nästlade iframes.
+#' @return En textsträng med JavaScript-kod som deklarerar variabeln `dok`.
+#' @export
+bygg_dokument_js <- function(iframe = NULL) {
+  if (is.null(iframe)) {
+    return("var dok = document;")
+  }
+  rlang::check_installed("jsonlite")
+  sprintf(
+    "var dok = document;
+     var framar = %s;
+     for (var fi = 0; fi < framar.length; fi++) {
+       var fr = dok.querySelector(framar[fi]);
+       if (!fr) return 'IFRAME_SAKNAS:' + framar[fi];
+       try { dok = fr.contentDocument || fr.contentWindow.document; }
+       catch (e) { return 'IFRAME_KORSDOMAN:' + framar[fi]; }
+       if (!dok) return 'IFRAME_KORSDOMAN:' + framar[fi];
+     }",
+    jsonlite::toJSON(as.character(iframe))
+  )
+}
+
+#' Tolka ett JS-svar från bygg_dokument_js() och kasta ett begripligt fel
+#'
+#' Interna hjälpfunktioner som använder `bygg_dokument_js()` returnerar en
+#' textsträng som börjar med `IFRAME_SAKNAS:` eller `IFRAME_KORSDOMAN:` när
+#' iframen inte gick att nå. Den här tolkar det och kastar ett läsbart
+#' R-fel istället för att låta den kryptiska strängen sippra vidare.
+#'
+#' @param resultat Returvärdet från ett kor_js()-anrop som kan innehålla en
+#'   `IFRAME_SAKNAS:`/`IFRAME_KORSDOMAN:`-prefixad felsträng.
+#' @return Inget (osynligt NULL) om `resultat` inte signalerar ett
+#'   iframe-fel - annars kastas ett fel och funktionen returnerar aldrig.
+#' @export
+kontrollera_iframe_svar <- function(resultat) {
+  if (is.character(resultat) && length(resultat) == 1) {
+    if (startsWith(resultat, "IFRAME_SAKNAS:")) {
+      stop("Hittade ingen iframe som matchar: ",
+           sub("^IFRAME_SAKNAS:", "", resultat))
+    }
+    if (startsWith(resultat, "IFRAME_KORSDOMAN:")) {
+      stop(
+        "Iframen '", sub("^IFRAME_KORSDOMAN:", "", resultat),
+        "' laddar innehall fran en annan doman (cross-origin) - da blockerar ",
+        "webblasarens sakerhetsmodell atkomst via JavaScript. Enklaste ",
+        "losningen ar oftast att navigera direkt till iframens src-URL med ",
+        "open_url() istallet."
+      )
+    }
+  }
+  invisible(NULL)
+}
+
+#' Kör JavaScript på sidan och returnera resultatet
+#'
+#' Liten hjälpfunktion för felsökning och inspektion.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param js JavaScript-kod (ett uttryck vars värde returneras).
+#'
+#' @return Uttryckets värde, konverterat till R.
+#' @export
+kor_js <- function(skrap, js) {
+  skrap$session$driver$Runtime$evaluate(js)$result$value
+}
+
+#' Kartlägg alla kontroller på den aktuella sidan
+#'
+#' Läser av sidans select-listor (med alla options), klickbara element
+#' (länkar och knappar) samt inmatningsfält (text, checkbox, radio).
+#' Ovärderlig när man bygger ett nytt skrapskript: öppna sidan, kör denna,
+#' och du ser exakt vilka id:n, values och texter du ska styra mot.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#'
+#' @return En lista med tre data.frames: selects (en rad per option, med
+#'   select_id, multiple, value, text, selected), klickbara (id, tag, text)
+#'   och inmatning (id, typ, name, value, checked).
+#'
+#' @examples
+#' \dontrun{
+#' skrap <- starta_skrapsession(headless = FALSE)
+#' selenider::open_url("https://exempel.se", session = skrap$session)
+#' kontroller <- inspektera_kontroller(skrap)
+#' kontroller$selects     # alla dropdowns och deras alternativ
+#' kontroller$klickbara   # alla länkar och knappar
+#' }
+#' @export
+inspektera_kontroller <- function(skrap) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- "JSON.stringify({
+    selects: [...document.querySelectorAll('select')].flatMap(s =>
+      [...s.options].map(o => ({
+        select_id: s.id || s.name || '(utan id)',
+        multiple: s.multiple,
+        value: o.value,
+        text: o.text.trim(),
+        selected: o.selected
+      }))
+    ),
+    klickbara: [...document.querySelectorAll(
+      'a, button, input[type=button], input[type=submit], [onclick], div, span'
+    )].filter(e => {
+      if (['A','BUTTON','INPUT'].includes(e.tagName)) return true;
+      // för div/span/generiska element: bara ta med om de verkar klickbara
+      // (cursor: pointer är den vanligaste signalen på en icke-semantisk knapp)
+      return e.hasAttribute('onclick') || getComputedStyle(e).cursor === 'pointer';
+    }).map(e => ({
+      id: e.id || '',
+      tag: e.tagName.toLowerCase(),
+      class: e.className || '',
+      href: e.getAttribute('href') || '',
+      text: (e.innerText || e.value || '').trim().slice(0, 60)
+    })).filter(e => (e.id !== '' || e.href !== '' || e.class !== '') && e.text !== ''),
+    inmatning: [...document.querySelectorAll(
+      'input[type=text], input[type=checkbox], input[type=radio], textarea'
+    )].map(e => ({
+      id: e.id || '',
+      typ: e.type,
+      name: e.name || '',
+      value: e.value,
+      checked: e.checked
+    }))
+  })"
+  
+  jsonlite::fromJSON(kor_js(skrap, js))
+}
+
+#' Skriv ut en kompakt översikt av sidans kontroller
+#'
+#' Som inspektera_kontroller(), men skriver en lättläst sammanfattning till
+#' konsolen istället för att returnera data.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param max_options Max antal options att visa per select-lista.
+#' @export
+visa_kontroller <- function(skrap, max_options = 10) {
+  k <- inspektera_kontroller(skrap)
+  
+  cat("=== SELECT-LISTOR ===\n")
+  if (length(k$selects) && nrow(k$selects)) {
+    for (id in unique(k$selects$select_id)) {
+      opts <- k$selects[k$selects$select_id == id, ]
+      cat(sprintf(
+        "#%s (%s, %d alternativ)\n",
+        id, if (opts$multiple[1]) "flerval" else "enval", nrow(opts)
+      ))
+      visa <- utils::head(opts, max_options)
+      cat(sprintf("   value=%-12s %s\n", visa$value, visa$text), sep = "")
+      if (nrow(opts) > max_options) {
+        cat("   ... och", nrow(opts) - max_options, "till\n")
+      }
+    }
+  }
+  
+  cat("\n=== KLICKBARA ELEMENT (med id, href eller klass) ===\n")
+  if (length(k$klickbara) && nrow(k$klickbara)) {
+    med_ankare <- k$klickbara[k$klickbara$id != "" | k$klickbara$href != "" | k$klickbara$class != "", ]
+    cat(sprintf("<%s> #%-15s href=%-25s class=%-25s %s\n",
+                med_ankare$tag, med_ankare$id, med_ankare$href, med_ankare$class, med_ankare$text), sep = "")
+    
+    saknar_id <- sum(med_ankare$id == "" & med_ankare$href != "")
+    if (saknar_id > 0) {
+      cat(sprintf(
+        "\nTips: %d element saknar id men har href. Klicka via CSS-attributselektor, t.ex.\n     klicka_via_id(skrap, \"a[href='%s']\")\n",
+        saknar_id, med_ankare$href[med_ankare$id == "" & med_ankare$href != ""][1]
+      ))
+    }
+    
+    saknar_id_och_href <- med_ankare[med_ankare$id == "" & med_ankare$href == "" & med_ankare$class != "", ]
+    if (nrow(saknar_id_och_href) > 0) {
+      cat(sprintf(
+        "\nTips: %d element saknar både id och href, men har en klass (typiskt en div/span-\"knapp\" i en SPA). Klicka via klass + exakt text, t.ex.\n     klicka_via_klass_och_text(skrap, \"%s\", \"%s\", tag = \"%s\")\n",
+        nrow(saknar_id_och_href), saknar_id_och_href$class[1], saknar_id_och_href$text[1], saknar_id_och_href$tag[1]
+      ))
+    }
+  }
+  
+  invisible(k)
+}
+
+#' Klicka på ett element via dess synliga text, direkt via JavaScript
+#'
+#' Motsvarar i praktiken Playwrights `text=`-selektor, men körs som EN
+#' JavaScript-körning via Chrome DevTools-protokollet istället för att låta
+#' selenider polla en xpath-fråga upprepade gånger. Använd den här hellre än
+#' ett xpath-baserat elem_click() när sidan har många element med liknande
+#' text (t.ex. en lång lista med "Alla kommuner" - en per län) - då kan
+#' seleniders upprepade väntekontroller bli mycket långsamma (uppemot en
+#' minut har setts i praktiken), eftersom varje kontroll måste läsa ihop
+#' all text i hela DOM-trädet för att hitta rätt matchning.
+#'
+#' Klickar på det FÖRSTA elementet (i dokumentordning) vars normaliserade
+#' text är exakt lika med `text`. Default-selektorn omfattar bara riktiga
+#' klickbara elementtyper (`a`, `button`, `input`, `label`) - INTE generiska
+#' omslagstaggar som `div`/`span`/`li`. Det är medvetet: en förälder-`<div>`
+#' vars enda innehåll är en `<a>`-länk har samma trimmade text som länken
+#' själv, och skulle då hittas FÖRE länken i dokumentordning (föräldrar
+#' kommer alltid före sina barn) - men klick på en sådan `<div>` gör oftast
+#' ingenting, eftersom klickhanteraren sitter på själva länken. Ange
+#' `selector` explicit bara om du vet att målelementet är av annan typ
+#' (t.ex. `"td"` för en klickbar tabellcell).
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param text Den synliga text som ska matchas exakt (efter trimning).
+#' @param selector CSS-selektor som avgränsar vilka element som
+#'   kontrolleras. Default täcker riktiga klickbara elementtyper.
+#' @param vanta Om TRUE (default), vänta in att elementet blir klickbart
+#'   (synligt) innan klicket görs, istället för att kräva att det redan
+#'   finns i DOM:en vid anropstillfället.
+#' @param grace Extra paus i sekunder efter att elementet blivit klickbart,
+#'   innan klicket görs - ger sidan en chans att bli helt klar med ev.
+#'   animationer/omritningar.
+#' @param timeout Max antal sekunder att vänta på att elementet blir
+#'   klickbart innan funktionen ger upp och kastar fel.
+#' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
+#'   till en iframe elementet ligger i. NULL (default) söker i
+#'   huvuddokumentet.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om ingen match hittas.
+#'
+#' @examples
+#' \dontrun{
+#' klicka_via_text(skrap, "Alla kommuner")
+#' }
+#' @export
+klicka_via_text <- function(skrap, text, selector = "a, button, input[type=button], input[type=submit], label",
+                            vanta = TRUE, grace = 0.3, timeout = 30,
+                            iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var els = dok.querySelectorAll(%s);
+       for (var i = 0; i < els.length; i++) {
+         if (els[i].textContent.trim() === %s) {
+           window.__skrapKlickMarkering = true;
+           els[i].click();
+           return true;
+         }
+       }
+       return false;
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(selector, auto_unbox = TRUE),
+    jsonlite::toJSON(text, auto_unbox = TRUE)
+  )
+  
+  hittad <- kor_js(skrap, js)
+  kontrollera_iframe_svar(hittad)
+  if (!isTRUE(hittad)) {
+    stop("Hittade inget klickbart element med texten: '", text, "'")
+  }
+  
+  if (isTRUE(vanta)) {
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout)
+  }
+  invisible(TRUE)
+}
+
+#' Klicka på ett element via CSS-klass OCH exakt text, direkt via JavaScript
+#'
+#' Som klicka_via_text(), men matchar bara element som HAR en given CSS-klass
+#' och vars trimmade text är exakt lika med `text`. Användbart på sidor där
+#' flera element delar samma klass (t.ex. flera "kort" i ett kortgränssnitt)
+#' och en ren klass- eller textmatchning därför skulle vara tvetydig eller
+#' matcha fel element.
+#'
+#' Kringgår, precis som klicka_via_text()/klicka_via_id(), seleniders
+#' elem_expect(is_visible) helt - användbart på sidor/element där den
+#' kontrollen av någon anledning ger falska negativ trots att elementet
+#' faktiskt syns och går att klicka (setts i praktiken på div-baserade
+#' "knappar" i vissa SPA:er).
+#'
+#' Hur man vet att den här funktionen behövs: `inspektera_kontroller()`/
+#' `visa_kontroller()` listar bara riktiga `a`/`button`/`input`-element samt
+#' element som har `onclick` eller `cursor: pointer` i sin beräknade stil.
+#' Om `visa_kontroller()` visar ett element utan `id` och utan `href`, men
+#' med en `class`, är det en stark signal att det är en sådan "div-knapp" -
+#' funktionen skriver då ut ett färdigt exempelanrop att använda. Om
+#' elementet inte dyker upp i `visa_kontroller()` alls, kan man hitta det
+#' manuellt med en JS-sökning, t.ex.:
+#' \preformatted{
+#' kor_js(skrap, "JSON.stringify([...document.querySelectorAll('div,span,li')]
+#'   .filter(e => e.children.length === 0 && e.textContent.trim() === 'Din text')
+#'   .map(e => ({tag: e.tagName.toLowerCase(), class: e.className})))")
+#' }
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param klass CSS-klassnamn (utan inledande punkt), t.ex. "big-button".
+#' @param text Den synliga text som ska matchas exakt (efter trimning).
+#' @param tag Vilken HTML-tagg elementet ska vara, t.ex. "div", "span",
+#'   "li". Default "div".
+#' @param vanta Om en eventuell sidladdning ska väntas in. Default TRUE.
+#' @param grace Respitperiod i sekunder, se klicka_via_id().
+#' @param timeout Max antal sekunder att vänta på att en sidladdning blir
+#'   klar.
+#' @param iframe Valfri CSS-selektor till ett iframe elementet ligger i.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om ingen match hittas.
+#'
+#' @examples
+#' \dontrun{
+#' klicka_via_klass_och_text(skrap, "big-button", "Servicetabell")
+#' }
+#' @export
+klicka_via_klass_och_text <- function(skrap, klass, text, tag = "div",
+                                      vanta = TRUE, grace = 0.3, timeout = 30,
+                                      iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var els = dok.querySelectorAll(%s);
+       for (var i = 0; i < els.length; i++) {
+         if (els[i].classList.contains(%s) && els[i].textContent.trim() === %s) {
+           window.__skrapKlickMarkering = true;
+           els[i].click();
+           return true;
+         }
+       }
+       return false;
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(tag, auto_unbox = TRUE),
+    jsonlite::toJSON(klass, auto_unbox = TRUE),
+    jsonlite::toJSON(text, auto_unbox = TRUE)
+  )
+  
+  hittad <- kor_js(skrap, js)
+  kontrollera_iframe_svar(hittad)
+  if (!isTRUE(hittad)) {
+    stop("Hittade inget element med tagg '", tag, "', klass '", klass,
+         "' och texten: '", text, "'")
+  }
+  
+  if (isTRUE(vanta)) {
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout)
+  }
+  invisible(TRUE)
+}
+
+#' Läs ut alla options ur en select-lista, i ett enda JavaScript-anrop
+#'
+#' Snabbare motsvarighet till att loopa `find_elements("option")` +
+#' `elem_attr()` per alternativ (som gör ett separat CDP-anrop per
+#' `<option>`, och därmed blir märkbart långsamt för listor med många
+#' alternativ). Läser istället ut alla `value`/`text`-par i en enda
+#' JavaScript-körning.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för `<select>`-elementet, t.ex. `"#AR"`.
+#' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
+#'   till en iframe select-elementet ligger i. NULL (default) söker i
+#'   huvuddokumentet.
+#'
+#' @return En data.frame med kolumnerna `value` och `text`, en rad per
+#'   `<option>`.
+#'
+#' @examples
+#' \dontrun{
+#' hamta_select_options(skrap, "#AR")
+#' }
+#' @export
+hamta_select_options <- function(skrap, css, iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var sel = dok.querySelector(%s);
+       if (!sel) return 'ELEMENT_SAKNAS';
+       return JSON.stringify([...sel.options].map(o => ({value: o.value, text: o.text.trim()})));
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(css, auto_unbox = TRUE)
+  )
+  
+  resultat <- kor_js(skrap, js)
+  kontrollera_iframe_svar(resultat)
+  
+  if (is.null(resultat)) {
+    stop(
+      "Fick inget svar fran sidan vid avlasning av ", css, ". ",
+      "Detta hander typiskt om sidan haller pa att laddas om (t.ex. efter ",
+      "en postback) - vanta in ett element med elem_expect(is_visible) ",
+      "innan avlasningen."
+    )
+  }
+  if (identical(resultat, "ELEMENT_SAKNAS")) {
+    stop("Hittade ingen select-lista som matchar: ", css)
+  }
+  
+  jsonlite::fromJSON(resultat)
+}
+
+#' Klicka på ett element via dess CSS-selektor, direkt via JavaScript
+#'
+#' Som klicka_via_text(), men matchar på en CSS-selektor (t.ex. ett `id`)
+#' istället för synlig text, och görs i en enda JavaScript-körning utan
+#' seleniders auto-wait. Använd för att snabba upp klick på element du
+#' redan vet finns och är synliga - eller som diagnostik för att avgöra om
+#' ett långsamt elem_click() beror på seleniders väntelogik eller på att
+#' sidan/servern faktiskt är långsam.
+#'
+#' Med `vanta = TRUE` (default) väntar funktionen automatiskt in en
+#' eventuell sidnavigering/postback som klicket utlöser: en markör
+#' planteras på sidan i samma ögonblick som klicket, och försvinner den har
+#' en ny sida börjat laddas - då väntar funktionen tills den är helt klar.
+#' Sker ingen navigering inom respitperioden `grace` släpps koden vidare
+#' nästan direkt.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för elementet som ska klickas.
+#' @param vanta Om en eventuell sidladdning ska väntas in. Default TRUE.
+#' @param grace Respitperiod i sekunder som en navigering får på sig att
+#'   börja. Kostnaden när ingen navigering sker. Default 0.3.
+#' @param timeout Max antal sekunder att vänta på att en sidladdning blir
+#'   klar.
+#' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
+#'   till en iframe elementet ligger i. NULL (default) söker i
+#'   huvuddokumentet.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om inget element hittas.
+#' @export
+klicka_via_id <- function(skrap, css, vanta = TRUE, grace = 0.3, timeout = 30,
+                          iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  # Markören satts i SAMMA JavaScript-körning som klicket - satts den i ett
+  # separat anrop finns en kapplöpning dar navigeringen hinner börja emellan.
+  js <- sprintf(
+    "(function(){
+       %s
+       var el = dok.querySelector(%s);
+       if (!el) return false;
+       window.__skrapKlickMarkering = true;
+       el.click();
+       return true;
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(css, auto_unbox = TRUE)
+  )
+  
+  hittad <- kor_js(skrap, js)
+  kontrollera_iframe_svar(hittad)
+  if (!isTRUE(hittad)) {
+    stop("Hittade inget element som matchar: ", css)
+  }
+  
+  if (isTRUE(vanta)) {
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout)
+  }
+  invisible(TRUE)
+}
+
+#' Vänta tills ett JavaScript-villkor blir sant
+#'
+#' Kompletterar elem_expect()/is_visible, som bara kontrollerar DOM-tillstånd
+#' (finns elementet, är det synligt). Vissa sidor har element som blir
+#' synliga innan sidans egen JavaScript hunnit initiera klart (t.ex. globala
+#' variabler som en onchange-hanterare förutsätter finns) - då kan ett klick
+#' eller val på ett "synligt" element ändå trigga ett JavaScript-fel. Denna
+#' funktion pollar ett godtyckligt JS-uttryck tills det returnerar en sann
+#' boolean.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param villkor JavaScript-uttryck som ska utvärderas till en boolean,
+#'   t.ex. `"typeof AR !== 'undefined'"`.
+#' @param timeout Max antal sekunder att vänta.
+#' @param intervall Sekunder mellan varje kontroll.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om villkoret aldrig blir sant.
+#'
+#' @examples
+#' \dontrun{
+#' vanta_pa_js(skrap, "typeof AR !== 'undefined'")
+#' }
+#' @export
+vanta_pa_js <- function(skrap, villkor, timeout = 30, intervall = 0.25) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  
+  start <- Sys.time()
+  repeat {
+    if (isTRUE(kor_js(skrap, villkor))) {
+      return(invisible(TRUE))
+    }
+    if (as.numeric(difftime(Sys.time(), start, units = "secs")) > timeout) {
+      stop("Villkoret blev aldrig sant inom ", timeout, " sekunder: ", villkor)
+    }
+    Sys.sleep(intervall)
+  }
+}
+
+#' Markera ett alternativ i en select-lista UTAN att trigga change-eventet
+#'
+#' Sätter markeringen direkt via JavaScript, utan att skicka det
+#' change-event som elem_select() (och en riktig användare) utlöser.
+#' Användbar när sidans egen onchange-hanterare är trasig och kraschar -
+#' vilket kan hindra sidan från att registrera valet innan t.ex. en
+#' ASP.NET-postback läser av det. Markeringen ligger i select-elementets
+#' DOM-tillstånd och postas ändå med formuläret vid nästa knapptryck.
+#'
+#' OBS: eftersom inget change-event skickas körs INTE heller eventuell
+#' legitim onchange-logik (t.ex. uppdatering av en räknare pa sidan).
+#' Använd elem_select() som förstahandsval och den här bara när sidans
+#' onchange bevisligen ställer till problem.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för `<select>`-elementet.
+#' @param value Värdet (eller vektor av värden för flervalslista) att
+#'   markera. Ersätter eventuell befintlig markering.
+#' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
+#'   till en iframe select-elementet ligger i. NULL (default) söker i
+#'   huvuddokumentet.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om elementet eller något av
+#'   värdena inte hittas.
+#' @export
+valj_option_utan_event <- function(skrap, css, value, iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var sel = dok.querySelector(%s);
+       if (!sel) return 'ELEMENT_SAKNAS';
+       var varden = %s;
+       var saknade = [];
+       for (var i = 0; i < sel.options.length; i++) {
+         sel.options[i].selected = varden.indexOf(sel.options[i].value) !== -1;
+       }
+       for (var j = 0; j < varden.length; j++) {
+         var finns = [...sel.options].some(o => o.value === varden[j]);
+         if (!finns) saknade.push(varden[j]);
+       }
+       return saknade.length ? 'SAKNAS:' + saknade.join(',') : 'OK';
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(css, auto_unbox = TRUE),
+    jsonlite::toJSON(as.character(value))
+  )
+  
+  resultat <- kor_js(skrap, js)
+  kontrollera_iframe_svar(resultat)
+  if (identical(resultat, "ELEMENT_SAKNAS")) {
+    stop("Hittade ingen select-lista som matchar: ", css)
+  }
+  if (startsWith(resultat, "SAKNAS:")) {
+    stop("Foljande value(s) finns inte i ", css, ": ",
+         sub("^SAKNAS:", "", resultat))
+  }
+  invisible(TRUE)
+}
+
+#' Sätt värde i en select-lista och trigga change/input-event
+#'
+#' Som valj_option_utan_event(), men triggar även change- och input-event
+#' efter att värdet satts. Använd den här när sidan (t.ex. Vue/Vuetify-
+#' baserade formulär) inte reagerar på att bara value/selected sätts, utan
+#' kräver ett riktigt change-event för att uppdatera sitt interna state.
+#' Förstahandsvalet är annars selenider::elem_select(), men den kan i vissa
+#' fall krascha internt (SyntaxError) beroende på hur selectorn ser ut -
+#' då är den här funktionen ett fungerande alternativ.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för `<select>`-elementet, t.ex. "select#AR"
+#'   eller `select[name='categories']`.
+#' @param value Value-attributet för det alternativ som ska väljas (se
+#'   hamta_select_options()/hamta_select_varden() för att lista värden).
+#' @param iframe Valfri CSS-selektor till ett iframe elementet ligger i.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om ingen match hittas.
+#'
+#' @examples
+#' \dontrun{
+#' valj_i_lista(skrap, "select[name='categories']", "19.4665efe718412b3921e1d45")
+#' }
+#' @export
+valj_i_lista <- function(skrap, css, value, iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var sel = dok.querySelector(%s);
+       if (!sel) return false;
+       sel.value = %s;
+       sel.dispatchEvent(new Event('change', { bubbles: true }));
+       sel.dispatchEvent(new Event('input', { bubbles: true }));
+       return true;
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(css, auto_unbox = TRUE),
+    jsonlite::toJSON(value, auto_unbox = TRUE)
+  )
+  
+  hittad <- kor_js(skrap, js)
+  kontrollera_iframe_svar(hittad)
+  if (!isTRUE(hittad)) {
+    stop("Hittade ingen select-lista som matchar: ", css)
+  }
+  invisible(TRUE)
+}
+
+#' Fyll i text i en textruta, direkt via JavaScript
+#'
+#' Som valj_option_utan_event(), fast för `input[type=text]`/`textarea`
+#' istället för select-listor: sätter `.value` i en enda JavaScript-körning
+#' utan seleniders auto-wait. Efteråt utlöses `input`- och `change`-event
+#' med `bubbles: true`, precis som en riktig tangenttryckning skulle göra -
+#' annars missar sidans egen JavaScript (t.ex. validering eller
+#' autocomplete som lyssnar på de eventen) att fältet ändrats.
+#'
+#' Behöver sidan verkligen simulera tangenttryckning för tecken - t.ex. ett
+#' autocomplete-fält som bygger sin sökning stegvis på `keydown`/`keyup` -
+#' räcker inte den här funktionen. Använd då
+#' `sess |> hitta(css) |> selenider::elem_send_keys(text)` istället.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för textrutan/textarean som ska fyllas i.
+#' @param text Texten som ska skrivas in.
+#' @param rensa Om fältets befintliga innehåll ska rensas först (default
+#'   TRUE, dvs. `text` ersätter allt). Med FALSE läggs `text` på slutet av
+#'   det som redan står i fältet.
+#' @param iframe Valfri CSS-selektor till ett iframe som textrutan ligger i.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om inget element hittas.
+#'
+#' @examples
+#' \dontrun{
+#' sess |> hitta("#sokruta") |> selenider::elem_expect(is_visible, timeout = 30)
+#' textruta_inmatning(sess, "#sokruta", "Dalarna")
+#' }
+#' @export
+textruta_inmatning <- function(skrap, css, text, rensa = TRUE, iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var el = dok.querySelector(%s);
+       if (!el) return 'ELEMENT_SAKNAS';
+       el.value = %s ? %s : (el.value || '') + %s;
+       el.dispatchEvent(new Event('input', {bubbles: true}));
+       el.dispatchEvent(new Event('change', {bubbles: true}));
+       return 'OK';
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(css, auto_unbox = TRUE),
+    if (isTRUE(rensa)) "true" else "false",
+    jsonlite::toJSON(as.character(text), auto_unbox = TRUE),
+    jsonlite::toJSON(as.character(text), auto_unbox = TRUE)
+  )
+  
+  resultat <- kor_js(skrap, js)
+  kontrollera_iframe_svar(resultat)
+  if (identical(resultat, "ELEMENT_SAKNAS")) {
+    stop("Hittade ingen textruta som matchar: ", css)
+  }
+  invisible(TRUE)
+}
+
+#' Vänta in en eventuell sidladdning efter ett klick (intern)
+#'
+#' Förutsätter att en markör (window.__skrapKlickMarkering) planterades pa
+#' sidan i samma JavaScript-körning som klicket. Logiken:
+#' - Är markören borta har en navigering skett (den nya sidan har den inte)
+#'   - vänta tills document.readyState === 'complete'.
+#' - Är markören kvar efter respitperioden `grace` skedde ingen navigering
+#'   - släpp vidare direkt.
+#' - Svarar sidan inte alls (JS-kontexten riven) pagar navigeringen - vänta.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param grace Respitperiod i sekunder som en eventuell navigering far pa
+#'   sig att börja innan vi drar slutsatsen att ingen kommer.
+#' @param timeout Max antal sekunder att vänta pa att en pagaende
+#'   sidladdning blir klar.
+#' @param intervall Sekunder mellan kontrollerna.
+#' @export
+vanta_pa_sidladdning <- function(skrap, grace = 0.3, timeout = 30, intervall = 0.1) {
+  start <- Sys.time()
+  navigering_sedd <- FALSE
+  
+  js <- "(function(){
+    if (window.__skrapKlickMarkering === true) {
+      return document.readyState === 'complete' ? 'KVAR_KLAR' : 'KVAR_LADDAR';
+    }
+    return document.readyState === 'complete' ? 'NY_KLAR' : 'NY_LADDAR';
+  })()"
+  
+  repeat {
+    status <- tryCatch(kor_js(skrap, js), error = function(e) NULL)
+    tid <- as.numeric(difftime(Sys.time(), start, units = "secs"))
+    
+    if (is.null(status) || identical(status, "NY_LADDAR")) {
+      # JS-kontexten riven eller ny sida under inladdning - navigering pagar
+      navigering_sedd <- TRUE
+    } else if (identical(status, "NY_KLAR")) {
+      # Ny sida fardigladdad
+      return(invisible(TRUE))
+    } else if (identical(status, "KVAR_KLAR") && !navigering_sedd && tid >= grace) {
+      # Markören kvar och ingen navigering setts under respitperioden
+      return(invisible(TRUE))
+    }
+    # KVAR_LADDAR eller inom respitperioden - fortsatt vanta
+    
+    if (tid > timeout) {
+      stop("Sidan blev inte fardigladdad inom ", timeout, " sekunder efter klicket.")
+    }
+    Sys.sleep(intervall)
+  }
+}
+
+#' Hitta ett element i en skrapsession (genväg)
+#'
+#' Tunn wrapper runt selenider::find_element() som tar skrapsession-objektet
+#' direkt. Motsvarar seleniders s(), som inte kan användas här eftersom den
+#' saknar session-argument (och våra sessioner skapas med local = FALSE).
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param ... Vidare till selenider::find_element() (css, xpath, id, ...).
+#'
+#' @return Ett selenider-element, redo att pipas till elem_click(),
+#'   elem_expect() osv.
+#'
+#' @examples
+#' \dontrun{
+#' hitta(skrap, "#AR") |> selenider::elem_expect(is_visible)
+#' }
+#' @export
+hitta <- function(skrap, ...) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  selenider::find_element(skrap$session, ...)
+}
+
+#' Hitta alla matchande element i en skrapsession (genväg)
+#'
+#' Som hitta(), men motsvarar selenider::find_elements()/ss().
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param ... Vidare till selenider::find_elements().
+#' @export
+hitta_alla <- function(skrap, ...) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  selenider::find_elements(skrap$session, ...)
+}
+
+#' Hitta ett element via dess synliga text
+#'
+#' Returnerar det INNERSTA elementet vars hela normaliserade text är exakt
+#' lika med `text` (tål blandade text- och elementnoder, t.ex.
+#' <label><input>Text</label>). Använd när du behöver ett element-objekt
+#' att kedja vidare på (elem_expect, elem_text, ...) - ska elementet bara
+#' klickas är klicka_via_text() snabbare, särskilt på sidor med många
+#' liknande textmatchningar (se dokumentationen).
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param text Den synliga text som ska matchas exakt.
+#'
+#' @return Ett selenider-element.
+#' @export
+hitta_via_text <- function(skrap, text) {
+  hitta(skrap, xpath = paste0(
+    "//*[normalize-space(.)='", text, "']",
+    "[not(.//*[normalize-space(.)='", text, "'])]"
+  ))
+}
+
+#' Läs ut enbart value-vektorn ur en select-lista
+#'
+#' Bekvämlighetswrapper runt hamta_select_options() för det vanliga fallet
+#' att man bara behöver alternativens value-attribut, t.ex. för att välja
+#' alla utom vissa: setdiff(hamta_select_varden(skrap, "#AR"), c("2014")).
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för select-elementet.
+#' @param iframe Valfri iframe-selektor, se hamta_select_options().
+#'
+#' @return En character-vektor med alla option-values.
+#' @export
+hamta_select_varden <- function(skrap, css, iframe = NULL) {
+  hamta_select_options(skrap, css, iframe = iframe)$value
+}
+
+#' Hämta ett attributvärde från ett element, direkt via JavaScript
+#'
+#' Motsvarar Playwrights page.get_attribute() - läser ett godtyckligt
+#' HTML-attribut (href, src, data-*, ...) från det första elementet som
+#' matchar en CSS-selektor.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param css CSS-selektor för elementet.
+#' @param attribut Namnet på attributet att läsa, t.ex. "href".
+#' @param iframe Valfri CSS-selektor till ett iframe elementet ligger i.
+#'
+#' @return Attributets värde som en textsträng, eller NA_character_ om
+#'   elementet finns men saknar attributet.
+#'
+#' @examples
+#' \dontrun{
+#' hamta_attribut(sess, "a[href$='.xlsx']", "href")
+#' }
+#' @export
+hamta_attribut <- function(skrap, css, attribut, iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+  
+  js <- sprintf(
+    "(function(){
+       %s
+       var el = dok.querySelector(%s);
+       if (!el) return 'ELEMENT_SAKNAS';
+       var v = el.getAttribute(%s);
+       return v === null ? 'ATTRIBUT_SAKNAS' : v;
+     })()",
+    bygg_dokument_js(iframe),
+    jsonlite::toJSON(css, auto_unbox = TRUE),
+    jsonlite::toJSON(attribut, auto_unbox = TRUE)
+  )
+  
+  resultat <- kor_js(skrap, js)
+  kontrollera_iframe_svar(resultat)
+  if (identical(resultat, "ELEMENT_SAKNAS")) {
+    stop("Hittade inget element som matchar: ", css)
+  }
+  if (identical(resultat, "ATTRIBUT_SAKNAS")) {
+    return(NA_character_)
+  }
+  resultat
+}
+
+#' Kör kod med en skrapsession och städa bort den automatiskt efteråt
+#'
+#' Bekvämlighetsfunktion som garanterar städning även om koden i uttrycket
+#' kastar ett fel.
+#'
+#' @param expr Kod att köra. En variabel med namnet `skrap` finns
+#'   tillgänglig i uttrycket och pekar på sessionsobjektet.
+#' @param ... Argument som skickas vidare till starta_skrapsession().
+#'
+#' @examples
+#' \dontrun{
+#' with_skrapsession({
+#'   selenider::open_url(skrap$session, "https://www.regiondalarna.se")
+#'   selenider::s(skrap$session, "title") |> selenider::elem_text()
+#' })
+#' }
+#' @export
+with_skrapsession <- function(expr, ...) {
+  skrap <- starta_skrapsession(...)
+  on.exit(stang_skrapsession(skrap), add = TRUE)
+  eval(substitute(expr), envir = list(skrap = skrap), enclos = parent.frame())
+}
+
+#' Ställ in var Edge ska spara nedladdade filer
+#'
+#' Talar om för Chrome DevTools-protokollet att nedladdningar ska tillåtas
+#' och sparas i en specifik mapp. Anropas normalt inte direkt, utan via
+#' hamta_nedladdning().
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param mapp Mapp dit nedladdningar ska sparas. Skapas om den inte finns.
+#'
+#' @return Mappens sökväg (osynligt).
+#' @export
+stall_in_nedladdningsmapp <- function(skrap, mapp) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  
+  dir.create(mapp, showWarnings = FALSE, recursive = TRUE)
+  
+  # Windows-Edge ar sakrast med backslash-sokvagar i downloadPath
+  mapp_norm <- normalizePath(mapp, winslash = "\\", mustWork = FALSE)
+  
+  # Vilken niva kommandot maste skickas till (hela webblasaren eller den
+  # enskilda flikens session) varierar mellan Chrome/Edge-versioner - satt
+  # pa BADA for att vara saker. try() pa webblasarnivan eftersom vissa
+  # versioner avvisar kommandot dar nar det saknar browserContextId.
+  try(
+    skrap$chrom$Browser$setDownloadBehavior(
+      behavior = "allow",
+      downloadPath = mapp_norm
+    ),
+    silent = TRUE
+  )
+  skrap$session$driver$Browser$setDownloadBehavior(
+    behavior = "allow",
+    downloadPath = mapp_norm
+  )
+  
+  invisible(mapp)
+}
+
+#' Klicka fram en nedladdning och vänta tills filen är klar
+#'
+#' Motsvarigheten till Playwrights `expect_download()`. Ställer in en
+#' nedladdningsmapp, kör den kod som triggar nedladdningen (t.ex. ett klick
+#' på en exportknapp), och pollar sedan mappen tills en ny fil dyker upp och
+#' slutar växa i storlek (dvs. Chrome/Edge är klar med att skriva den).
+#'
+#' Chrome/Edge sparar ofdärdiga nedladdningar med ändelsen `.crdownload`
+#' (eller `.tmp`) tills de är klara — dessa ignoreras vid sökningen efter
+#' den färdiga filen.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param trigger En funktion utan argument som utför klicket/handlingen som
+#'   startar nedladdningen, t.ex.
+#'   `function() selenider::s(skrap$session, "button.exportera") |> selenider::elem_click()`.
+#' @param nedladdningsmapp Mapp dit filen ska sparas. Default en unik
+#'   temp-mapp per anrop.
+#' @param monster Valfritt reguljärt uttryck för att bara acceptera filer
+#'   som matchar (t.ex. `"\\.xlsx$"`), ifall sidan skapar flera filer
+#'   samtidigt och bara en är den du vill ha.
+#' @param timeout Max antal sekunder att vänta på att nedladdningen dyker
+#'   upp och blir klar.
+#' @param stabil_tid Antal sekunder filstorleken måste vara oförändrad
+#'   innan filen räknas som klar. Höj vid stora filer på långsamma nät.
+#'
+#' @return Sökvägen till den nedladdade filen.
+#'
+#' @examples
+#' \dontrun{
+#' skrap <- starta_skrapsession()
+#' selenider::open_url(skrap$session, "https://exempel.se/statistik")
+#'
+#' fil <- hamta_nedladdning(
+#'   skrap,
+#'   trigger = function() {
+#'     selenider::s(skrap$session, "button:has-text('Ladda ner Excel')") |>
+#'       selenider::elem_click()
+#'   },
+#'   nedladdningsmapp = "C:/temp/nedladdningar",
+#'   monster = "\\.xlsx$"
+#' )
+#'
+#' fil
+#' stang_skrapsession(skrap)
+#' }
+#' @export
+hamta_nedladdning <- function(skrap,
+                              trigger,
+                              nedladdningsmapp = tempfile("nedladdning-"),
+                              monster = NULL,
+                              timeout = 30,
+                              stabil_tid = 1) {
+  
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  if (!is.function(trigger)) {
+    stop("trigger maste vara en funktion utan argument, t.ex. ",
+         "function() selenider::s(skrap$session, 'button') |> selenider::elem_click()")
+  }
+  
+  stall_in_nedladdningsmapp(skrap, nedladdningsmapp)
+  
+  filer_innan <- list.files(nedladdningsmapp, full.names = TRUE)
+  
+  trigger()
+  
+  start <- Sys.time()
+  senast_storlek <- -1
+  stabil_sedan <- NULL
+  
+  repeat {
+    if (as.numeric(difftime(Sys.time(), start, units = "secs")) > timeout) {
+      stop(
+        "Ingen nedladdning blev klar inom ", timeout,
+        " sekunder i mappen: ", nedladdningsmapp
+      )
+    }
+    
+    alla_filer <- list.files(nedladdningsmapp, full.names = TRUE)
+    if (!is.null(monster)) {
+      alla_filer <- alla_filer[grepl(monster, alla_filer)]
+    }
+    nya_filer <- setdiff(alla_filer, filer_innan)
+    # Ignorera Edges/Chromes ofardiga nedladdningsfiler
+    kandidater <- nya_filer[!grepl("\\.crdownload$|\\.tmp$", nya_filer)]
+    
+    if (length(kandidater) >= 1) {
+      fil <- kandidater[[1]]
+      storlek <- suppressWarnings(file.info(fil)$size)
+      
+      if (!is.na(storlek) && storlek == senast_storlek && storlek > 0) {
+        if (is.null(stabil_sedan)) {
+          stabil_sedan <- Sys.time()
+        }
+        if (as.numeric(difftime(Sys.time(), stabil_sedan, units = "secs")) >= stabil_tid) {
+          return(fil)
+        }
+      } else {
+        senast_storlek <- storlek
+        stabil_sedan <- NULL
+      }
+    }
+    
+    Sys.sleep(0.3)
+  }
+}
+
+#' Ladda ner flera filer via länkar/knappar som matchar ett sökord
+#'
+#' Praktiskt när en sida listar flera nedladdningsbara filer (t.ex. en rad
+#' rapporter per år eller kvartal) och du vill ladda ner alla, eller alla
+#' som matchar ett sökord - istället för att skriva ett hamta_nedladdning()
+#' -anrop för hand per länk. Bygger vidare på hamta_nedladdning() och laddar
+#' ner filerna en i taget (så att varje nedladdning hinner bli klar och
+#' identifieras korrekt innan nästa klick).
+#'
+#' Läser av alla matchande element EN gång, innan något klickas - annars
+#' riskerar sidan att ha ändrats (t.ex. att en rad försvinner eller
+#' ordningen ändras efter varje nedladdning) mellan klicken, vilket skulle
+#' göra matchningen opålitlig.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param matchning Text eller reguljärt uttryck som ska matcha länkens/
+#'   knappens synliga text. NULL (default) laddar ner alla element som
+#'   matchar `css`.
+#' @param css CSS-selektor för de klickbara elementen. Default `"a"`
+#'   (länkar) - sätt t.ex. till `"a, button"` om nedladdningar även
+#'   triggas av knappar.
+#' @param fixed Om TRUE tolkas `matchning` som en bokstavlig delsträng
+#'   istället för ett reguljärt uttryck (vidarebefordras till `grepl()`).
+#' @param nedladdningsmapp Mapp dit filerna ska sparas.
+#' @param monster Valfritt reguljärt uttryck för att bara acceptera filer
+#'   av en viss typ (vidarebefordras till hamta_nedladdning() för varje
+#'   fil), t.ex. `"\\.xlsx$"` om sidan även har andra nedladdningslänkar
+#'   som inte ska räknas med.
+#' @param timeout_per_fil,stabil_tid Vidarebefordras till
+#'   hamta_nedladdning() för varje enskild fil.
+#' @param iframe Vidarebefordras till bygg_dokument_js()/klicka_via_text()
+#'   om länkarna ligger i en iframe.
+#'
+#' @return En namngiven character-vektor med sökvägar till de nedladdade
+#'   filerna - namnen är länkarnas/knapparnas synliga text, i samma
+#'   ordning som de klickades.
+#'
+#' @examples
+#' \dontrun{
+#' skrap <- starta_skrapsession()
+#' selenider::open_url(skrap$session, "https://exempel.se/rapporter")
+#'
+#' # Alla filer som matchar "Kvartalsrapport":
+#' filer <- hamta_flera_nedladdningar(
+#'   skrap,
+#'   matchning = "Kvartalsrapport",
+#'   nedladdningsmapp = "C:/temp/rapporter"
+#' )
+#' filer
+#'
+#' # Samtliga nedladdningslänkar på sidan, oavsett text:
+#' alla_filer <- hamta_flera_nedladdningar(skrap, nedladdningsmapp = "C:/temp/rapporter")
+#'
+#' stang_skrapsession(skrap)
+#' }
+#' @export
+hamta_flera_nedladdningar <- function(skrap,
+                                       matchning = NULL,
+                                       css = "a",
+                                       fixed = FALSE,
+                                       nedladdningsmapp = tempfile("nedladdningar-"),
+                                       monster = NULL,
+                                       timeout_per_fil = 30,
+                                       stabil_tid = 1,
+                                       iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+
+  dok <- bygg_dokument_js(iframe = iframe)
+  js <- sprintf(
+    "JSON.stringify([...%s.querySelectorAll(%s)].map(e => (e.textContent || '').trim()).filter(t => t.length > 0))",
+    dok, jsonlite::toJSON(css, auto_unbox = TRUE)
+  )
+  texter <- jsonlite::fromJSON(kor_js(skrap, js))
+
+  if (!is.null(matchning)) {
+    texter <- texter[grepl(matchning, texter, fixed = isTRUE(fixed))]
+  }
+  # Flera element kan ha identisk text (t.ex. samma "Ladda ner"-etikett
+  # upprepad per rad i en tabell) - klicka_via_text() kräver unik träff,
+  # så vi håller koll på hur många gånger varje text redan setts och
+  # matchar mot n:te förekomsten via hitta_alla()/index istället för
+  # klicka_via_text() i det fallet.
+  unika_texter <- unique(texter)
+
+  if (length(texter) == 0) {
+    stop(
+      "Inga element matchade css = '", css, "'",
+      if (!is.null(matchning)) paste0(" och matchning = '", matchning, "'"),
+      "."
+    )
+  }
+
+  stall_in_nedladdningsmapp(skrap, nedladdningsmapp)
+
+  resultat <- character(length(texter))
+  names(resultat) <- texter
+  raknare <- stats::setNames(integer(length(unika_texter)), unika_texter)
+  dok <- bygg_dokument_js(iframe = iframe)
+
+  for (i in seq_along(texter)) {
+    text <- texter[[i]]
+    raknare[[text]] <- raknare[[text]] + 1
+    n <- raknare[[text]]
+
+    resultat[[i]] <- hamta_nedladdning(
+      skrap,
+      trigger = function() {
+        # Matchar den n:te förekomsten av exakt den här texten bland de
+        # element som matchar css - hanterar fallet att flera rader/länkar
+        # på sidan råkar ha identisk synlig text (t.ex. upprepad
+        # "Ladda ner"-etikett per rad i en tabell).
+        js <- sprintf(
+          "(function() { var els = [...%s.querySelectorAll(%s)].filter(function(e){ return (e.textContent||'').trim() === %s; }); var el = els[%d]; if (el) el.click(); return !!el; })();",
+          dok, jsonlite::toJSON(css, auto_unbox = TRUE),
+          jsonlite::toJSON(text, auto_unbox = TRUE), n - 1L
+        )
+        traff <- vanta_kor_js(skrap, js)
+        if (!isTRUE(traff)) {
+          stop("Hittade inte förekomst nr ", n, " av texten '", text, "' (css = '", css, "').")
+        }
+      },
+      nedladdningsmapp = nedladdningsmapp,
+      monster = monster,
+      timeout = timeout_per_fil,
+      stabil_tid = stabil_tid
+    )
+  }
+
+  resultat
+}
+
+#' Initiera en loggfunktion för webbskrapning
+#'
+#' Skapar och returnerar en loggfunktion som skriver ut meddelanden med
+#' förfluten tid sedan start, förutsatt att `verbose` är TRUE. Den
+#' returnerade funktionen "minns" (via closure) vilka värden på `verbose`
+#' och `tid_start` den skapades med, så att den kan anropas med enbart en
+#' textsträng vid varje efterföljande loggning.
+#'
+#' @param verbose Om TRUE (default) skriver den returnerade loggfunktionen
+#'   ut meddelanden. Om FALSE gör den ingenting.
+#' @param tid_start Tidpunkt (POSIXct) som förfluten tid ska beräknas från.
+#'   Default är aktuell tidpunkt när `loggning_initiera()` anropas (fixeras
+#'   direkt med `force()` för att undvika ett negativt första värde).
+#'
+#' @return En funktion med signaturen `function(txt)` som, när den anropas,
+#'   skriver ut `txt` föregånget av förfluten tid i sekunder sedan
+#'   `tid_start`, t.ex. `"[  3.2 s] Startar nedladdning..."`.
+#'
+#' @examples
+#' tid_start <- Sys.time()
+#' logg <- loggning_initiera(verbose = TRUE, tid_start = tid_start)
+#' logg("Startar nedladdning...")
+#'
+
+#' @export
+loggning_initiera <- function(verbose = TRUE, tid_start = Sys.time()) {
+  force(tid_start)
+  function(txt) {
+    if (isTRUE(verbose)) {
+      message(sprintf("[%6.1f s] %s",
+                      as.numeric(difftime(Sys.time(), tid_start, units = "secs")),
+                      txt))
+    }
+  }
+}
