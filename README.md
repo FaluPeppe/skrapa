@@ -1,4 +1,4 @@
-# skrapfunktioner
+# skrapa
 
 Samlade funktioner för webbskrapning via `chromote`/`selenider`, plus ett
 interaktivt inspelningsgadget som genererar R-kod utifrån dessa funktioner.
@@ -21,23 +21,9 @@ interaktivt inspelningsgadget som genererar R-kod utifrån dessa funktioner.
 pak::pak(".")
 
 # eller direkt från GitHub när det är pushat:
-pak::pak("Region-Dalarna/skrapfunktioner")
+pak::pak("Region-Dalarna/skrapa")
 ```
 
 ## Kommande steg
 
-- [ ] Döp om paketet om `skrapfunktioner` inte känns rätt (sök/ersätt i
-      `DESCRIPTION`).
-- [ ] Kör `roxygen2::roxygenise()` (kräver `roxygen2`-paketet installerat)
-      för att bygga om `NAMESPACE` och `man/`-hjälpsidorna automatiskt
-      utifrån `@export`-taggarna och roxygen-kommentarerna i `R/*.R` -
-      `NAMESPACE` är just nu handskriven som en startpunkt.
-- [ ] Kör `devtools::check()` för att fånga eventuella kvarvarande problem
-      (saknade `@param`/titlar på funktioner som `hitta_webblasare()` och
-      `testa_skrapmiljo()`, som saknade fullständig roxygen-dokumentation
-      redan i originalfilen).
-- [ ] Fundera på om `generera_rad()` ska vara exporterad eller intern
-      (`@keywords internal`) - den är just nu satt som publik för enkelhets
-      skull, men används normalt bara internt av `generera_skript()`.
-- [ ] Lägg till `testthat`-tester, särskilt för `generera_rad()`s
-      prioriteringslogik (id → text → klass+text → `kor_js()`-fallback).
+
