@@ -21,7 +21,7 @@ interaktivt inspelningsgadget som genererar R-kod utifrån dessa funktioner.
 pak::pak(".")
 
 # eller direkt från GitHub när det är pushat:
-pak::pak("Region-Dalarna/skrapa")
+pak::pak("FaluPeppe/skrapa")
 ```
 
 ## Kommande steg
