@@ -11,6 +11,7 @@ klicka_via_text(
   vanta = TRUE,
   grace = 0.3,
   timeout = 30,
+  dom_stabil_tid = 0.3,
   iframe = NULL
 )
 }
@@ -32,6 +33,10 @@ animationer/omritningar.}
 
 \item{timeout}{Max antal sekunder att vänta på att elementet blir
 klickbart innan funktionen ger upp och kastar fel.}
+
+\item{dom_stabil_tid}{Vidarebefordras till vanta_pa_sidladdning() - se
+dokumentationen där. Sätt till NULL/0 om sidan har kontinuerligt
+uppdaterande innehåll som annars aldrig blir "stabilt".}
 
 \item{iframe}{Valfri CSS-selektor (eller vektor för nästlade iframes)
 till en iframe elementet ligger i. NULL (default) söker i

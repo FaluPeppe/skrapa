@@ -4,7 +4,8 @@
 \alias{vanta_pa_sidladdning}
 \title{Vänta in en eventuell sidladdning efter ett klick (intern)}
 \usage{
-vanta_pa_sidladdning(skrap, grace = 0.3, timeout = 30, intervall = 0.1)
+vanta_pa_sidladdning(skrap, grace = 0.3, timeout = 30, intervall = 0.1,
+  dom_stabil_tid = 0.3)
 }
 \arguments{
 \item{skrap}{Ett objekt skapat av starta_skrapsession().}
@@ -13,9 +14,17 @@ vanta_pa_sidladdning(skrap, grace = 0.3, timeout = 30, intervall = 0.1)
 sig att börja innan vi drar slutsatsen att ingen kommer.}
 
 \item{timeout}{Max antal sekunder att vänta pa att en pagaende
-sidladdning blir klar.}
+sidladdning blir klar, TOTALT inklusive den avslutande
+DOM-stabilitetskontrollen.}
 
 \item{intervall}{Sekunder mellan kontrollerna.}
+
+\item{dom_stabil_tid}{Antal sekunder utan DOM-ändringar som krävs, som ett
+avslutande steg, innan funktionen returnerar - se
+vanta_pa_stabil_dom(). Sätt till NULL eller 0 för att stänga av detta
+steg (t.ex. om sidan har kontinuerligt uppdaterande innehåll, som en
+klocka, som annars aldrig blir "stabilt"). Default 0.3 sekunder, vilket
+i normalfallet är en försumbar extra kostnad.}
 }
 \description{
 Förutsätter att en markör (window.__skrapKlickMarkering) planterades pa
@@ -31,4 +40,10 @@ sidan i samma JavaScript-körning som klicket. Logiken:
 }
 \item Svarar sidan inte alls (JS-kontexten riven) pagar navigeringen - vänta.
 }
+
+Väntar därefter, som ett sista steg (om \code{dom_stabil_tid} inte är NULL/0),
+in att DOM:en slutat ändra sig via vanta_pa_stabil_dom() - detta är vad
+som gör att klick fungerar tillförlitligt även på SPA:er/inbäddade
+lösningar (t.ex. Qlik) som aldrig triggar en riktig sidnavigering, men
+vars innehåll ändå fortsätter uppdateras en stund efter klicket.
 }
