@@ -10,6 +10,7 @@ klicka_via_id(
   vanta = TRUE,
   grace = 0.3,
   timeout = 30,
+  dom_stabil_tid = 0.3,
   iframe = NULL
 )
 }
@@ -25,6 +26,9 @@ börja. Kostnaden när ingen navigering sker. Default 0.3.}
 
 \item{timeout}{Max antal sekunder att vänta på att en sidladdning blir
 klar.}
+
+\item{dom_stabil_tid}{Vidarebefordras till vanta_pa_sidladdning() - se
+dokumentationen där.}
 
 \item{iframe}{Valfri CSS-selektor (eller vektor för nästlade iframes)
 till en iframe elementet ligger i. NULL (default) söker i

@@ -676,6 +676,9 @@ visa_kontroller <- function(skrap, max_options = 10) {
 #'   animationer/omritningar.
 #' @param timeout Max antal sekunder att vänta på att elementet blir
 #'   klickbart innan funktionen ger upp och kastar fel.
+#' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
+#'   dokumentationen där. Sätt till NULL/0 om sidan har kontinuerligt
+#'   uppdaterande innehåll som annars aldrig blir "stabilt".
 #' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
 #'   till en iframe elementet ligger i. NULL (default) söker i
 #'   huvuddokumentet.
@@ -689,7 +692,7 @@ visa_kontroller <- function(skrap, max_options = 10) {
 #' @export
 klicka_via_text <- function(skrap, text, selector = "a, button, input[type=button], input[type=submit], label",
                             vanta = TRUE, grace = 0.3, timeout = 30,
-                            iframe = NULL) {
+                            dom_stabil_tid = 0.3, iframe = NULL) {
   if (!inherits(skrap, "skrapsession")) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
@@ -720,7 +723,7 @@ klicka_via_text <- function(skrap, text, selector = "a, button, input[type=butto
   }
   
   if (isTRUE(vanta)) {
-    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout)
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
   }
   invisible(TRUE)
 }
@@ -762,6 +765,8 @@ klicka_via_text <- function(skrap, text, selector = "a, button, input[type=butto
 #' @param grace Respitperiod i sekunder, se klicka_via_id().
 #' @param timeout Max antal sekunder att vänta på att en sidladdning blir
 #'   klar.
+#' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
+#'   dokumentationen där.
 #' @param iframe Valfri CSS-selektor till ett iframe elementet ligger i.
 #'
 #' @return Inget (osynligt TRUE). Kastar fel om ingen match hittas.
@@ -773,7 +778,7 @@ klicka_via_text <- function(skrap, text, selector = "a, button, input[type=butto
 #' @export
 klicka_via_klass_och_text <- function(skrap, klass, text, tag = "div",
                                       vanta = TRUE, grace = 0.3, timeout = 30,
-                                      iframe = NULL) {
+                                      dom_stabil_tid = 0.3, iframe = NULL) {
   if (!inherits(skrap, "skrapsession")) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
@@ -806,7 +811,7 @@ klicka_via_klass_och_text <- function(skrap, klass, text, tag = "div",
   }
   
   if (isTRUE(vanta)) {
-    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout)
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
   }
   invisible(TRUE)
 }
@@ -891,6 +896,8 @@ hamta_select_options <- function(skrap, css, iframe = NULL) {
 #'   börja. Kostnaden när ingen navigering sker. Default 0.3.
 #' @param timeout Max antal sekunder att vänta på att en sidladdning blir
 #'   klar.
+#' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
+#'   dokumentationen där.
 #' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
 #'   till en iframe elementet ligger i. NULL (default) söker i
 #'   huvuddokumentet.
@@ -898,7 +905,7 @@ hamta_select_options <- function(skrap, css, iframe = NULL) {
 #' @return Inget (osynligt TRUE). Kastar fel om inget element hittas.
 #' @export
 klicka_via_id <- function(skrap, css, vanta = TRUE, grace = 0.3, timeout = 30,
-                          iframe = NULL) {
+                          dom_stabil_tid = 0.3, iframe = NULL) {
   if (!inherits(skrap, "skrapsession")) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
@@ -926,7 +933,7 @@ klicka_via_id <- function(skrap, css, vanta = TRUE, grace = 0.3, timeout = 30,
   }
   
   if (isTRUE(vanta)) {
-    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout)
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
   }
   invisible(TRUE)
 }
@@ -1149,6 +1156,99 @@ textruta_inmatning <- function(skrap, css, text, rensa = TRUE, iframe = NULL) {
   invisible(TRUE)
 }
 
+#' Vänta tills DOM:en slutat ändra sig
+#'
+#' Ett "network idle"-liknande väntekomplement till vanta_pa_sidladdning(),
+#' för SPA:er/inbäddade lösningar (t.ex. Qlik Sense/QlikView) där ett klick
+#' inte triggar en riktig sidnavigering - `document.readyState` är redan
+#' `'complete'` hela tiden, trots att innehållet fortfarande uppdateras
+#' asynkront (typiskt via websocket) långt efter klicket. Sådana sidor kan
+#' göra att koden fortsätter (t.ex. klickar på nästa kontroll, eller läser
+#' av ett resultat) innan den föregående uppdateringen hunnit rendera klart.
+#'
+#' Fungerar genom att installera en `MutationObserver` på dokumentet (eller
+#' angiven iframe) som stämplar tiden för senaste DOM-ändring, och sedan
+#' polla från R-sidan tills det gått `stabil_tid` sekunder sedan senaste
+#' ändringen. Observatören installeras bara en gång per dokument (lagras på
+#' `document`) - upprepade anrop under samma sida återanvänder den, och en
+#' ny sida (efter en riktig navigering) får automatiskt en ny.
+#'
+#' Generisk med flit: den letar inte efter Qlik-specifika klasser eller
+#' attribut, utan efter DOM-aktivitet rent generellt - fungerar därför lika
+#' bra för andra ramverk (React, Vue, ...) som råkar rendera om utan
+#' fullständig sidnavigering.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param stabil_tid Antal sekunder utan DOM-ändringar som krävs innan
+#'   sidan räknas som klar.
+#' @param timeout Max antal sekunder att vänta totalt innan funktionen ger
+#'   upp och kastar fel.
+#' @param intervall Sekunder mellan varje kontroll.
+#' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
+#'   till en iframe vars innehåll ska övervakas. NULL (default) övervakar
+#'   huvuddokumentet.
+#'
+#' @return Inget (osynligt TRUE). Kastar fel om DOM:en aldrig blir stabil
+#'   inom `timeout` sekunder.
+#'
+#' @examples
+#' \dontrun{
+#' klicka_via_id(skrap, "#visa-diagram", vanta = FALSE)
+#' vanta_pa_stabil_dom(skrap, stabil_tid = 0.5, timeout = 20)
+#' }
+#' @export
+vanta_pa_stabil_dom <- function(skrap, stabil_tid = 0.3, timeout = 30, intervall = 0.1,
+                                iframe = NULL) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  rlang::check_installed("jsonlite")
+
+  # Installerar (om det inte redan finns) en MutationObserver på dokumentet
+  # och returnerar millisekunder sedan senaste DOM-ändringen. Görs i EN
+  # JS-körning per kontroll, och körs om vid varje poll istället för en gång
+  # i förväg - det gör att en navigering som sker UNDER väntan (nytt
+  # dokument, ingen observatör installerad än) automatiskt fångas upp och
+  # får sin egen observatör, utan att kasta ett iframe/kontext-fel.
+  js <- sprintf(
+    "(function(){
+       %s
+       if (!dok.__skrapDomObserver) {
+         dok.__skrapSenasteMutation = performance.now();
+         var mo = new MutationObserver(function(){
+           dok.__skrapSenasteMutation = performance.now();
+         });
+         mo.observe(dok, {childList: true, subtree: true, attributes: true, characterData: true});
+         dok.__skrapDomObserver = mo;
+         return 0;
+       }
+       return performance.now() - dok.__skrapSenasteMutation;
+     })()",
+    bygg_dokument_js(iframe)
+  )
+
+  start <- Sys.time()
+  repeat {
+    tystnad_ms <- tryCatch(kor_js(skrap, js), error = function(e) NULL)
+    kontrollera_iframe_svar(tystnad_ms)
+
+    if (is.numeric(tystnad_ms) && tystnad_ms >= stabil_tid * 1000) {
+      return(invisible(TRUE))
+    }
+
+    if (as.numeric(difftime(Sys.time(), start, units = "secs")) > timeout) {
+      stop(
+        "DOM:en slutade aldrig vara stabil i ", stabil_tid, " sekunder, ",
+        "inom en total vantetid pa ", timeout, " sekunder. Sidan kan vara ",
+        "i en kontinuerlig uppdateringsloop (t.ex. en klocka eller ",
+        "auto-uppdaterande widget) - hoj stabil_tid/timeout eller anvand ",
+        "vanta_pa_js()/elem_expect() mot ett specifikt element istallet."
+      )
+    }
+    Sys.sleep(intervall)
+  }
+}
+
 #' Vänta in en eventuell sidladdning efter ett klick (intern)
 #'
 #' Förutsätter att en markör (window.__skrapKlickMarkering) planterades pa
@@ -1159,40 +1259,70 @@ textruta_inmatning <- function(skrap, css, text, rensa = TRUE, iframe = NULL) {
 #'   - släpp vidare direkt.
 #' - Svarar sidan inte alls (JS-kontexten riven) pagar navigeringen - vänta.
 #'
+#' Väntar därefter, som ett sista steg (om `dom_stabil_tid` inte är NULL/0),
+#' in att DOM:en slutat ändra sig via vanta_pa_stabil_dom() - detta är vad
+#' som gör att klick fungerar tillförlitligt även på SPA:er/inbäddade
+#' lösningar (t.ex. Qlik) som aldrig triggar en riktig sidnavigering, men
+#' vars innehåll ändå fortsätter uppdateras en stund efter klicket.
+#'
 #' @param skrap Ett objekt skapat av starta_skrapsession().
 #' @param grace Respitperiod i sekunder som en eventuell navigering far pa
 #'   sig att börja innan vi drar slutsatsen att ingen kommer.
 #' @param timeout Max antal sekunder att vänta pa att en pagaende
-#'   sidladdning blir klar.
+#'   sidladdning blir klar, TOTALT inklusive den avslutande
+#'   DOM-stabilitetskontrollen.
 #' @param intervall Sekunder mellan kontrollerna.
+#' @param dom_stabil_tid Antal sekunder utan DOM-ändringar som krävs, som ett
+#'   avslutande steg, innan funktionen returnerar - se
+#'   vanta_pa_stabil_dom(). Sätt till NULL eller 0 för att stänga av detta
+#'   steg (t.ex. om sidan har kontinuerligt uppdaterande innehåll, som en
+#'   klocka, som annars aldrig blir "stabilt"). Default 0.3 sekunder, vilket
+#'   i normalfallet är en försumbar extra kostnad.
 #' @export
-vanta_pa_sidladdning <- function(skrap, grace = 0.3, timeout = 30, intervall = 0.1) {
+vanta_pa_sidladdning <- function(skrap, grace = 0.3, timeout = 30, intervall = 0.1,
+                                 dom_stabil_tid = 0.3) {
   start <- Sys.time()
   navigering_sedd <- FALSE
-  
+
   js <- "(function(){
     if (window.__skrapKlickMarkering === true) {
       return document.readyState === 'complete' ? 'KVAR_KLAR' : 'KVAR_LADDAR';
     }
     return document.readyState === 'complete' ? 'NY_KLAR' : 'NY_LADDAR';
   })()"
-  
+
+  # Avslutar med ett anrop till vanta_pa_stabil_dom() (om aktiverat), med
+  # aterstoden av timeout-budgeten - sa att det sammanlagda anropet aldrig
+  # far vanta markbart langre an vad `timeout` bads om.
+  klar <- function() {
+    if (!is.null(dom_stabil_tid) && dom_stabil_tid > 0) {
+      atid <- as.numeric(difftime(Sys.time(), start, units = "secs"))
+      vanta_pa_stabil_dom(
+        skrap,
+        stabil_tid = dom_stabil_tid,
+        timeout = max(dom_stabil_tid, timeout - atid),
+        intervall = intervall
+      )
+    }
+    invisible(TRUE)
+  }
+
   repeat {
     status <- tryCatch(kor_js(skrap, js), error = function(e) NULL)
     tid <- as.numeric(difftime(Sys.time(), start, units = "secs"))
-    
+
     if (is.null(status) || identical(status, "NY_LADDAR")) {
       # JS-kontexten riven eller ny sida under inladdning - navigering pagar
       navigering_sedd <- TRUE
     } else if (identical(status, "NY_KLAR")) {
       # Ny sida fardigladdad
-      return(invisible(TRUE))
+      return(klar())
     } else if (identical(status, "KVAR_KLAR") && !navigering_sedd && tid >= grace) {
       # Markören kvar och ingen navigering setts under respitperioden
-      return(invisible(TRUE))
+      return(klar())
     }
     # KVAR_LADDAR eller inom respitperioden - fortsatt vanta
-    
+
     if (tid > timeout) {
       stop("Sidan blev inte fardigladdad inom ", timeout, " sekunder efter klicket.")
     }
@@ -1315,6 +1445,14 @@ hamta_attribut <- function(skrap, css, attribut, iframe = NULL) {
   
   resultat <- kor_js(skrap, js)
   kontrollera_iframe_svar(resultat)
+  if (is.null(resultat)) {
+    stop(
+      "Fick inget svar fran sidan vid avlasning av ", css, ". ",
+      "Detta hander typiskt om sidan haller pa att laddas om (t.ex. efter ",
+      "en postback) - vanta in ett element med elem_expect(is_visible) ",
+      "innan avlasningen."
+    )
+  }
   if (identical(resultat, "ELEMENT_SAKNAS")) {
     stop("Hittade inget element som matchar: ", css)
   }
@@ -1478,7 +1616,12 @@ hamta_nedladdning <- function(skrap,
       fil <- kandidater[[1]]
       storlek <- suppressWarnings(file.info(fil)$size)
       
-      if (!is.na(storlek) && storlek == senast_storlek && storlek > 0) {
+      # OBS: kravde tidigare aven storlek > 0, vilket gjorde att en
+      # nedladdning som faktiskt blir en tom (0 byte) fil aldrig
+      # upptacktes som klar - senast_storlek startar pa -1 (ett omojligt
+      # filstorlekvarde), sa en riktig storlek pa 0 bytes ar fortfarande
+      # sarskiljbar fran det.
+      if (!is.na(storlek) && storlek == senast_storlek) {
         if (is.null(stabil_sedan)) {
           stabil_sedan <- Sys.time()
         }
