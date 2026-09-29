@@ -595,6 +595,8 @@ generera_skript <- function(handelser, url = NULL,
     "# DOM-väntan aldrig blir 'stabil', sätt dom_stabil_tid = NULL på",
     "# klick i den delen av skriptet.",
     "",
+    "library(skrapa)",
+    "",
     "skrap <- starta_skrapsession(headless = FALSE)",
     if (!is.null(url)) sprintf('selenider::open_url("%s", session = skrap$session)', url),
     if (har_nedladdningar) sprintf(
@@ -772,10 +774,44 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
       skript <- generera_skript(handelser(), url = url, nedladdningsmapp = nedladdningsmapp)
       
       cat(skript, "\n")
-      
+
+      # clipr::write_clip() ger (pa Windows, via utils::writeClipboard())
+      # ibland en VARNING istallet for ett fel om urklipp tillfalligt ar
+      # upptaget av ett annat program (t.ex. en urklippshanterare, RStudios
+      # egen viewer, eller en antivirusprodukt som haller det kort) - koden
+      # fortsatte da och pastod felaktigt att kopieringen lyckats. Fangar nu
+      # upp varningen, gor ett andra forsok efter en kort paus, och rapporterar
+      # arligt om det fortfarande inte gick.
+      forsok_kopiera <- function() {
+        lyckades <- TRUE
+        withCallingHandlers(
+          clipr::write_clip(skript),
+          warning = function(w) {
+            lyckades <<- FALSE
+            invokeRestart("muffleWarning")
+          }
+        )
+        lyckades
+      }
+
+      kopierat <- FALSE
       if (rlang::is_installed("clipr") && clipr::clipr_available()) {
-        clipr::write_clip(skript)
+        kopierat <- tryCatch(forsok_kopiera(), error = function(e) FALSE)
+        if (!kopierat) {
+          Sys.sleep(0.3)
+          kopierat <- tryCatch(forsok_kopiera(), error = function(e) FALSE)
+        }
+      }
+
+      if (kopierat) {
         message("Skriptet ovan är kopierat till urklipp.")
+      } else if (rlang::is_installed("clipr") && clipr::clipr_available()) {
+        message(
+          "Skriptet ovan kunde INTE kopieras till urklipp - urklipp var ",
+          "(aven efter ett andra forsok) upptaget av ett annat program ",
+          "(t.ex. en urklippshanterare eller antivirusprodukt). Kopiera ",
+          "manuellt fran konsolen ovan."
+        )
       } else {
         message(
           "Skriptet ovan kunde INTE kopieras till urklipp (paketet 'clipr' ",

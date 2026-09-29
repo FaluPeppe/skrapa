@@ -143,6 +143,18 @@ det klicket:
 klicka_via_id(skrap, "#knapp", dom_stabil_tid = NULL)
 ```
 
+**"Hittade inget element..." direkt efter open_url() eller ett tidigare
+klick** - det du klickar på finns ofta inte i DOM:en ännu i just det
+ögonblicket (t.ex. första klicket på en sida byggd med React/Vue/MUI, som
+behöver en liten stund att rendera klart efter att sidan öppnats).
+Klick-funktionerna väntar redan i upp till 10 sekunder på att elementet
+dyker upp innan de ger upp - räcker inte det på en särskilt trög sida,
+höj det med `timeout_finns`:
+
+```r
+klicka_via_id(skrap, "#knapp", timeout_finns = 20)
+```
+
 **Edge/Chrome startar inte, eller AppLocker/gruppolicy blockerar**
 Kör `testa_skrapmiljo()` - den talar om exakt vilket steg som failar och
 vad du (eller din IT-avdelning) behöver göra åt det.

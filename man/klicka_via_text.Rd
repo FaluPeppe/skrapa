@@ -11,6 +11,7 @@ klicka_via_text(
   vanta = TRUE,
   grace = 0.3,
   timeout = 30,
+  timeout_finns = 10,
   dom_stabil_tid = 0.3,
   iframe = NULL
 )
@@ -33,6 +34,12 @@ animationer/omritningar.}
 
 \item{timeout}{Max antal sekunder att vänta på att elementet blir
 klickbart innan funktionen ger upp och kastar fel.}
+
+\item{timeout_finns}{Max antal sekunder att vänta på att elementet
+DYKER UPP i DOM:en och matchar (skilt från \code{timeout}, som gäller
+EFTER att klicket redan skett). Avgörande på SPA:er där ett element
+inte finns förrän sidan hunnit rendera klart, t.ex. precis efter
+open_url() eller ett föregående klick.}
 
 \item{dom_stabil_tid}{Vidarebefordras till vanta_pa_sidladdning() - se
 dokumentationen där. Sätt till NULL/0 om sidan har kontinuerligt

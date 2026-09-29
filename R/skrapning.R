@@ -642,6 +642,44 @@ visa_kontroller <- function(skrap, max_options = 10) {
   invisible(k)
 }
 
+#' Vänta tills ett klick-JS-anrop lyckas hitta och klicka på elementet (intern)
+#'
+#' Delad hjälpfunktion för klicka_via_id()/klicka_via_text()/
+#' klicka_via_klass_och_text(): elementet finns ofta inte i DOM:en ÄN vid
+#' anropstillfället - särskilt precis efter open_url() eller ett tidigare
+#' klick i en SPA (React/Vue/MUI m.fl.), där sidan hinner rendera klart
+#' EFTER att R-koden redan når fram till nästa rad. Pollar därför
+#' klick-JS:en (som redan bygger in både matchning och själva klicket i
+#' ett enda uttryck) upprepade gånger, tills den lyckas eller tiden går ut
+#' - istället för att ge upp direkt bara för att elementet råkade saknas i
+#' just den millisekunden anropet gjordes.
+#'
+#' Ett IFRAME_SAKNAS:/IFRAME_KORSDOMAN:-svar är ett strukturellt fel (fel
+#' iframe-selektor, eller en iframe som aldrig blir same-origin) och
+#' väntas INTE ut - det kastas direkt, precis som i övriga funktioner.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param js JS-uttryck som returnerar TRUE om det hittade och klickade
+#'   elementet, annars FALSE.
+#' @param timeout_finns Max antal sekunder att vänta på att elementet dyker
+#'   upp och går att klicka.
+#' @param intervall Sekunder mellan varje försök.
+#' @return TRUE om klicket lyckades inom timeout_finns, annars FALSE.
+vanta_pa_klicktraff <- function(skrap, js, timeout_finns, intervall = 0.2) {
+  start <- Sys.time()
+  repeat {
+    hittad <- kor_js(skrap, js)
+    kontrollera_iframe_svar(hittad)
+    if (isTRUE(hittad)) {
+      return(TRUE)
+    }
+    if (as.numeric(difftime(Sys.time(), start, units = "secs")) > timeout_finns) {
+      return(FALSE)
+    }
+    Sys.sleep(intervall)
+  }
+}
+
 #' Klicka på ett element via dess synliga text, direkt via JavaScript
 #'
 #' Motsvarar i praktiken Playwrights `text=`-selektor, men körs som EN
@@ -676,6 +714,11 @@ visa_kontroller <- function(skrap, max_options = 10) {
 #'   animationer/omritningar.
 #' @param timeout Max antal sekunder att vänta på att elementet blir
 #'   klickbart innan funktionen ger upp och kastar fel.
+#' @param timeout_finns Max antal sekunder att vänta på att elementet
+#'   DYKER UPP i DOM:en och matchar (skilt från `timeout`, som gäller
+#'   EFTER att klicket redan skett). Avgörande på SPA:er där ett element
+#'   inte finns förrän sidan hunnit rendera klart, t.ex. precis efter
+#'   open_url() eller ett föregående klick.
 #' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
 #'   dokumentationen där. Sätt till NULL/0 om sidan har kontinuerligt
 #'   uppdaterande innehåll som annars aldrig blir "stabilt".
@@ -692,12 +735,12 @@ visa_kontroller <- function(skrap, max_options = 10) {
 #' @export
 klicka_via_text <- function(skrap, text, selector = "a, button, input[type=button], input[type=submit], label",
                             vanta = TRUE, grace = 0.3, timeout = 30,
-                            dom_stabil_tid = 0.3, iframe = NULL) {
+                            timeout_finns = 10, dom_stabil_tid = 0.3, iframe = NULL) {
   if (!inherits(skrap, "skrapsession")) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
   rlang::check_installed("jsonlite")
-  
+
   js <- sprintf(
     "(function(){
        %s
@@ -715,13 +758,15 @@ klicka_via_text <- function(skrap, text, selector = "a, button, input[type=butto
     jsonlite::toJSON(selector, auto_unbox = TRUE),
     jsonlite::toJSON(text, auto_unbox = TRUE)
   )
-  
-  hittad <- kor_js(skrap, js)
-  kontrollera_iframe_svar(hittad)
+
+  hittad <- vanta_pa_klicktraff(skrap, js, timeout_finns = timeout_finns)
   if (!isTRUE(hittad)) {
-    stop("Hittade inget klickbart element med texten: '", text, "'")
+    stop(
+      "Hittade inget klickbart element med texten: '", text, "' (vantade i ",
+      timeout_finns, " sekunder pa att det skulle dyka upp)"
+    )
   }
-  
+
   if (isTRUE(vanta)) {
     vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
   }
@@ -765,6 +810,9 @@ klicka_via_text <- function(skrap, text, selector = "a, button, input[type=butto
 #' @param grace Respitperiod i sekunder, se klicka_via_id().
 #' @param timeout Max antal sekunder att vänta på att en sidladdning blir
 #'   klar.
+#' @param timeout_finns Max antal sekunder att vänta på att elementet
+#'   dyker upp och matchar innan funktionen ger upp och kastar fel - se
+#'   klicka_via_text().
 #' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
 #'   dokumentationen där.
 #' @param iframe Valfri CSS-selektor till ett iframe elementet ligger i.
@@ -778,12 +826,13 @@ klicka_via_text <- function(skrap, text, selector = "a, button, input[type=butto
 #' @export
 klicka_via_klass_och_text <- function(skrap, klass, text, tag = "div",
                                       vanta = TRUE, grace = 0.3, timeout = 30,
-                                      dom_stabil_tid = 0.3, iframe = NULL) {
+                                      timeout_finns = 10, dom_stabil_tid = 0.3,
+                                      iframe = NULL) {
   if (!inherits(skrap, "skrapsession")) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
   rlang::check_installed("jsonlite")
-  
+
   js <- sprintf(
     "(function(){
        %s
@@ -802,14 +851,16 @@ klicka_via_klass_och_text <- function(skrap, klass, text, tag = "div",
     jsonlite::toJSON(klass, auto_unbox = TRUE),
     jsonlite::toJSON(text, auto_unbox = TRUE)
   )
-  
-  hittad <- kor_js(skrap, js)
-  kontrollera_iframe_svar(hittad)
+
+  hittad <- vanta_pa_klicktraff(skrap, js, timeout_finns = timeout_finns)
   if (!isTRUE(hittad)) {
-    stop("Hittade inget element med tagg '", tag, "', klass '", klass,
-         "' och texten: '", text, "'")
+    stop(
+      "Hittade inget element med tagg '", tag, "', klass '", klass,
+      "' och texten: '", text, "' (vantade i ", timeout_finns,
+      " sekunder pa att det skulle dyka upp)"
+    )
   }
-  
+
   if (isTRUE(vanta)) {
     vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
   }
@@ -896,6 +947,9 @@ hamta_select_options <- function(skrap, css, iframe = NULL) {
 #'   börja. Kostnaden när ingen navigering sker. Default 0.3.
 #' @param timeout Max antal sekunder att vänta på att en sidladdning blir
 #'   klar.
+#' @param timeout_finns Max antal sekunder att vänta på att elementet
+#'   dyker upp och matchar innan funktionen ger upp och kastar fel - se
+#'   klicka_via_text().
 #' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
 #'   dokumentationen där.
 #' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
@@ -905,12 +959,12 @@ hamta_select_options <- function(skrap, css, iframe = NULL) {
 #' @return Inget (osynligt TRUE). Kastar fel om inget element hittas.
 #' @export
 klicka_via_id <- function(skrap, css, vanta = TRUE, grace = 0.3, timeout = 30,
-                          dom_stabil_tid = 0.3, iframe = NULL) {
+                          timeout_finns = 10, dom_stabil_tid = 0.3, iframe = NULL) {
   if (!inherits(skrap, "skrapsession")) {
     stop("Objektet ar inte skapat av starta_skrapsession().")
   }
   rlang::check_installed("jsonlite")
-  
+
   # Markören satts i SAMMA JavaScript-körning som klicket - satts den i ett
   # separat anrop finns en kapplöpning dar navigeringen hinner börja emellan.
   js <- sprintf(
@@ -925,13 +979,15 @@ klicka_via_id <- function(skrap, css, vanta = TRUE, grace = 0.3, timeout = 30,
     bygg_dokument_js(iframe),
     jsonlite::toJSON(css, auto_unbox = TRUE)
   )
-  
-  hittad <- kor_js(skrap, js)
-  kontrollera_iframe_svar(hittad)
+
+  hittad <- vanta_pa_klicktraff(skrap, js, timeout_finns = timeout_finns)
   if (!isTRUE(hittad)) {
-    stop("Hittade inget element som matchar: ", css)
+    stop(
+      "Hittade inget element som matchar: ", css, " (vantade i ",
+      timeout_finns, " sekunder pa att det skulle dyka upp)"
+    )
   }
-  
+
   if (isTRUE(vanta)) {
     vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
   }
