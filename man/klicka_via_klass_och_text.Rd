@@ -12,6 +12,7 @@ klicka_via_klass_och_text(
   vanta = TRUE,
   grace = 0.3,
   timeout = 30,
+  timeout_finns = 10,
   dom_stabil_tid = 0.3,
   iframe = NULL
 )
@@ -32,6 +33,10 @@ klicka_via_klass_och_text(
 
 \item{timeout}{Max antal sekunder att vänta på att en sidladdning blir
 klar.}
+
+\item{timeout_finns}{Max antal sekunder att vänta på att elementet
+dyker upp och matchar innan funktionen ger upp och kastar fel - se
+klicka_via_text().}
 
 \item{dom_stabil_tid}{Vidarebefordras till vanta_pa_sidladdning() - se
 dokumentationen där.}

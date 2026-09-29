@@ -10,6 +10,7 @@ klicka_via_id(
   vanta = TRUE,
   grace = 0.3,
   timeout = 30,
+  timeout_finns = 10,
   dom_stabil_tid = 0.3,
   iframe = NULL
 )
@@ -26,6 +27,10 @@ börja. Kostnaden när ingen navigering sker. Default 0.3.}
 
 \item{timeout}{Max antal sekunder att vänta på att en sidladdning blir
 klar.}
+
+\item{timeout_finns}{Max antal sekunder att vänta på att elementet
+dyker upp och matchar innan funktionen ger upp och kastar fel - se
+klicka_via_text().}
 
 \item{dom_stabil_tid}{Vidarebefordras till vanta_pa_sidladdning() - se
 dokumentationen där.}
@@ -52,4 +57,9 @@ planteras på sidan i samma ögonblick som klicket, och försvinner den har
 en ny sida börjat laddas - då väntar funktionen tills den är helt klar.
 Sker ingen navigering inom respitperioden \code{grace} släpps koden vidare
 nästan direkt.
+
+Väntar dessutom, INNAN klicket ens görs, upp till \code{timeout_finns}
+sekunder på att elementet dyker upp och matchar - avgörande på
+SPA:er/React/Vue-sidor där elementet inte finns i DOM:en förrän sidan
+hunnit rendera klart efter t.ex. open_url() eller ett föregående klick.
 }
