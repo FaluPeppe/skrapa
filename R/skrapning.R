@@ -258,7 +258,12 @@ test_internetanslutning <- function(url = "https://raw.githubusercontent.com", t
 #'   virtuell skärmstorlek via Chrome DevTools-protokollet oberoende av det
 #'   faktiska OS-fönstrets storlek - höj den här om sidan bara syns i en
 #'   smal kolumn trots ett maximerat fönster.
-#' @param hojd Viewportens höjd i pixlar.
+#' @param hojd Viewportens höjd i pixlar. Samma sak som `bredd`: låst av
+#'   Chrome DevTools-protokollet oberoende av fönstrets faktiska storlek.
+#'   Går det INTE att scrolla ner till botten av sidan i en synlig session
+#'   (`headless = FALSE`, t.ex. under `kor_inspelningsgadget()`) beror det
+#'   nästan alltid på att den riktiga skärmen/fönstret är större än denna
+#'   virtuella höjd - höj `hojd` (och `bredd`) tills det matchar din skärm.
 #' @param user_agent Valfri user agent-sträng. I headless-läge innehåller
 #'   standard-UA:n "HeadlessChrome", vilket enkla botskydd känner igen -
 #'   ange en vanlig webbläsar-UA här för att undvika det.
@@ -282,8 +287,8 @@ starta_skrapsession <- function(port = NULL,
                                 profil_dir = tempfile("edge-profil-"),
                                 timeout = 15,
                                 view = FALSE,
-                                bredd = 1600,
-                                hojd = 1000,
+                                bredd = 1920,
+                                hojd = 1400,
                                 user_agent = NULL) {
   
   # Kolla internetanslutning forst - ger ett tydligt fel direkt istallet for

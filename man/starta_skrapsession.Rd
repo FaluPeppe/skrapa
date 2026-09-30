@@ -11,8 +11,8 @@ starta_skrapsession(
   profil_dir = tempfile("edge-profil-"),
   timeout = 15,
   view = FALSE,
-  bredd = 1600,
-  hojd = 1000,
+  bredd = 1920,
+  hojd = 1400,
   user_agent = NULL
 )
 }
@@ -41,7 +41,12 @@ virtuell skärmstorlek via Chrome DevTools-protokollet oberoende av det
 faktiska OS-fönstrets storlek - höj den här om sidan bara syns i en
 smal kolumn trots ett maximerat fönster.}
 
-\item{hojd}{Viewportens höjd i pixlar.}
+\item{hojd}{Viewportens höjd i pixlar. Samma sak som \code{bredd}: låst av
+Chrome DevTools-protokollet oberoende av fönstrets faktiska storlek.
+Går det INTE att scrolla ner till botten av sidan i en synlig session
+(\code{headless = FALSE}, t.ex. under \code{kor_inspelningsgadget()}) beror det
+nästan alltid på att den riktiga skärmen/fönstret är större än denna
+virtuella höjd - höj \code{hojd} (och \code{bredd}) tills det matchar din skärm.}
 
 \item{user_agent}{Valfri user agent-sträng. I headless-läge innehåller
 standard-UA:n "HeadlessChrome", vilket enkla botskydd känner igen -
