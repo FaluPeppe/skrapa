@@ -13,10 +13,12 @@ generera_rad(rad)
 En textrad med R-kod, eller NA om händelsen ska hoppas över.
 }
 \description{
-Prioritetsordning: id först (unikt per HTML-spec), därefter den svagaste
-identifieraren som vid inspelningstillfället faktiskt bekräftats vara
-unik på sidan (text ensamt, sedan klass+text) - annars kor_js() med den
-inspelade DOM-sökvägen som sista utväg. Svelte-typ "scoped"-klasser
-(t.ex. "svelte-zhv9wr") filtreras bort eftersom de är instabila mellan
-builds.
+Prioritetsordning: id först (unikt per HTML-spec), därefter aria-label
+(om unikt på sidan) - avgörande för ikonknappar utan synlig text, som
+annars bara kan identifieras via den bräckliga DOM-sökvägen - därefter
+den svagaste identifieraren som vid inspelningstillfället faktiskt
+bekräftats vara unik på sidan (text ensamt, sedan klass+text) - annars
+kor_js() med den inspelade DOM-sökvägen som sista utväg. Svelte-typ
+"scoped"-klasser (t.ex. "svelte-zhv9wr") filtreras bort eftersom de är
+instabila mellan builds.
 }
