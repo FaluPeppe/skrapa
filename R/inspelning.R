@@ -23,7 +23,7 @@
 # att det är odefinierade globala variabler.
 utils::globalVariables(c(
   "hantelse", "tag", "id", "klass", "text", "vald_text", "varde",
-  "iframe", "sokvag"
+  "iframe", "sokvag", "aria_label"
 ))
 
 # --- 0. Städa policy-styrda extra-flikar ------------------------------------
@@ -173,6 +173,21 @@ injicera_inspelning <- function(skrap) {
         } catch (err) { return -1; }
         return n;
       }
+      // Som textAntal(), men för aria-label - avgörande för ikonknappar
+      // (stäng-kryss, pilar, "tre punkter"-menyer m.fl.) som saknar synlig
+      // text helt, men nästan alltid har ett aria-label för skärmläsare.
+      // Sådana attribut är i praktiken mycket stabilare än genererade
+      // CSS-klasser (som t.ex. Material-UI ofta hashar om mellan builds).
+      function ariaAntal(aria) {
+        if (!aria) return -1;
+        var n = 0;
+        try {
+          document.querySelectorAll('[aria-label]').forEach(function(e) {
+            if (e.getAttribute('aria-label') === aria) n++;
+          });
+        } catch (err) { return -1; }
+        return n;
+      }
 
       // Gissar om ett klick sannolikt triggar en nedladdning: antingen ett
       // uttryckligt download-attribut, eller en href som pekar på en
@@ -190,6 +205,7 @@ injicera_inspelning <- function(skrap) {
         var tag = el.tagName ? el.tagName.toLowerCase() : '';
         var text = (el.textContent || '').trim().slice(0, 200);
         var klass = el.className && typeof el.className === 'string' ? el.className : null;
+        var aria = el.getAttribute('aria-label') || null;
         return {
           tag: tag,
           id: el.id || null,
@@ -205,6 +221,8 @@ injicera_inspelning <- function(skrap) {
           sokvag: sokvag(el),
           text_antal: textAntal(text),
           klass_text_antal: klassTextAntal(klass, text, tag),
+          aria_label: aria,
+          aria_label_antal: ariaAntal(aria),
           href: (tag === 'a') ? (el.href || null) : null,
           nedladdning: troligNedladdning(el, tag)
         };
@@ -224,9 +242,17 @@ injicera_inspelning <- function(skrap) {
         // förälder med egen text om man träffat en ikon/span utan text
         // inuti 'knappen' (max 4 nivåer, för att inte hamna på en
         // container som råkar innehålla mycket annan text också).
+        // Stannar ÄVEN på ett element med eget aria-label (vanligt på
+        // ikonknappar utan synlig text, t.ex. en stäng-kryss) - annars
+        // klättrar loopen förbi just det elementet (aria-label räknas
+        // inte som textContent) och tappar den enda pålitliga
+        // identifieraren knappen faktiskt hade.
         var el = e.target;
         var niva = 0;
-        while (el && el !== document.body && !(el.textContent || '').trim() && niva < 4) {
+        while (el && el !== document.body &&
+               !(el.textContent || '').trim() &&
+               !el.getAttribute('aria-label') &&
+               niva < 4) {
           el = el.parentElement;
           niva++;
         }
@@ -312,6 +338,7 @@ lasa_av_inspelning <- function(skrap) {
       namn = character(), typ = character(), varde = character(),
       vald_text = character(), iframe = character(), sokvag = character(),
       text_antal = double(), klass_text_antal = double(),
+      aria_label = character(), aria_label_antal = double(),
       href = character(), nedladdning = logical()
     ))
   }
@@ -324,6 +351,7 @@ lasa_av_inspelning <- function(skrap) {
       namn = character(), typ = character(), varde = character(),
       vald_text = character(), iframe = character(), sokvag = character(),
       text_antal = double(), klass_text_antal = double(),
+      aria_label = character(), aria_label_antal = double(),
       href = character(), nedladdning = logical()
     ))
   }
@@ -344,6 +372,8 @@ lasa_av_inspelning <- function(skrap) {
       sokvag = h$sokvag %||% NA_character_,
       text_antal = h$text_antal %||% NA_real_,
       klass_text_antal = h$klass_text_antal %||% NA_real_,
+      aria_label = h$aria_label %||% NA_character_,
+      aria_label_antal = h$aria_label_antal %||% NA_real_,
       href = h$href %||% NA_character_,
       nedladdning = h$nedladdning %||% FALSE
     )
@@ -389,12 +419,14 @@ vanta_kor_js <- function(skrap, js, timeout = 10, intervall = 0.2) {
 
 #' Bygg ett R-uttryck (som text) för en enskild inspelad händelse
 #'
-#' Prioritetsordning: id först (unikt per HTML-spec), därefter den svagaste
-#' identifieraren som vid inspelningstillfället faktiskt bekräftats vara
-#' unik på sidan (text ensamt, sedan klass+text) - annars kor_js() med den
-#' inspelade DOM-sökvägen som sista utväg. Svelte-typ "scoped"-klasser
-#' (t.ex. "svelte-zhv9wr") filtreras bort eftersom de är instabila mellan
-#' builds.
+#' Prioritetsordning: id först (unikt per HTML-spec), därefter aria-label
+#' (om unikt på sidan) - avgörande för ikonknappar utan synlig text, som
+#' annars bara kan identifieras via den bräckliga DOM-sökvägen - därefter
+#' den svagaste identifieraren som vid inspelningstillfället faktiskt
+#' bekräftats vara unik på sidan (text ensamt, sedan klass+text) - annars
+#' kor_js() med den inspelade DOM-sökvägen som sista utväg. Svelte-typ
+#' "scoped"-klasser (t.ex. "svelte-zhv9wr") filtreras bort eftersom de är
+#' instabila mellan builds.
 #'
 #' @param rad En rad (som lista) från lasa_av_inspelning().
 #' @return En textrad med R-kod, eller NA om händelsen ska hoppas över.
@@ -421,7 +453,19 @@ generera_rad <- function(rad) {
     x <- gsub("\\\\", "\\\\\\\\", x)
     gsub('"', '\\\\"', x)
   }
-  
+
+  # Städar ett aria-label-värde för infogning i en genererad kodrad av
+  # formen 'klicka_via_id(skrap, \'[aria-label="VÄRDE"]\')' - koden runt
+  # om använder enkla citattecken (R-strängen) med dubbla citattecken
+  # inuti (CSS-attributvärdet), så bakstreck, enkla och dubbla citattecken
+  # maste escapas (bakstreck-escape ar giltigt i bada sammanhangen).
+  aria_stad <- function(x) {
+    if (is.na(x)) return("")
+    x <- gsub("\\\\", "\\\\\\\\", x)
+    x <- gsub("'", "\\\\'", x)
+    gsub('"', '\\\\"', x)
+  }
+
   if (rad$hantelse == "click") {
     klass_stadad <- stad_klass(rad$klass)
     ifr <- iframe_arg(rad$iframe)
@@ -439,15 +483,28 @@ generera_rad <- function(rad) {
       }
     }
     
-    # Prioritetsordning: id (alltid unikt per HTML-spec) - därefter den
-    # SVAGASTE identifieraren som ändå faktiskt är unik på sidan, kollat
-    # vid inspelningstillfället (text_antal/klass_text_antal). Är varken
-    # text ensamt eller klass+text unikt (t.ex. fem "Nästa"-knappar) ger
-    # ingen av bibliotekets funktioner en pålitlig träff - då används
-    # kor_js() med den inspelade DOM-sökvägen istället, som är garanterat
-    # unik eftersom den bygger på elementets faktiska position.
+    # Prioritetsordning: id (alltid unikt per HTML-spec) - därefter aria-label
+    # (om unikt) - avgörande för ikonknappar utan synlig text (stäng-kryss,
+    # pilar, "tre punkter"-menyer m.fl.), som annars bara kan identifieras
+    # via den bräckliga DOM-sökvägen. aria-label är dessutom ofta stabilare
+    # än genererade CSS-klasser, som t.ex. Material-UI kan hasha om mellan
+    # driftsättningar - därefter den SVAGASTE identifieraren som ändå
+    # faktiskt är unik på sidan, kollat vid inspelningstillfället
+    # (text_antal/klass_text_antal). Är inget av ovan unikt (t.ex. fem
+    # "Nästa"-knappar) ger ingen av bibliotekets funktioner en pålitlig
+    # träff - då används kor_js() med den inspelade DOM-sökvägen istället,
+    # som är garanterat unik eftersom den bygger på elementets faktiska
+    # position (men känslig för att den positionen kan ändras mellan
+    # inspelning och körning, se README).
     if (!is.na(rad$id) && nzchar(rad$id)) {
       return(sprintf('klicka_via_id(skrap, "#%s"%s)', rad$id, ifr))
+    }
+    if (!is.na(rad$aria_label) && nzchar(rad$aria_label) &&
+        !is.na(rad$aria_label_antal) && rad$aria_label_antal == 1) {
+      return(sprintf(
+        'klicka_via_id(skrap, \'[aria-label="%s"]\'%s)',
+        aria_stad(rad$aria_label), ifr
+      ))
     }
     if (!is.na(rad$text) && nzchar(rad$text) &&
         !is.na(rad$text_antal) && rad$text_antal == 1) {
@@ -680,6 +737,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
         namn = character(), typ = character(), varde = character(),
         vald_text = character(), iframe = character(), sokvag = character(),
         text_antal = double(), klass_text_antal = double(),
+        aria_label = character(), aria_label_antal = double(),
         href = character(), nedladdning = logical()
       )
     )
@@ -728,7 +786,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
     
     output$logg_tabell <- shiny::renderUI({
       df <- handelser() |>
-        dplyr::select(hantelse, tag, id, klass, text, vald_text, varde, iframe, sokvag)
+        dplyr::select(hantelse, tag, id, klass, text, aria_label, vald_text, varde, iframe, sokvag)
       if (nrow(df) == 0) return(shiny::tags$em("Inga händelser inspelade ännu."))
       
       kolumner <- names(df)

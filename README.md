@@ -53,6 +53,10 @@ kopieras automatiskt till urklipp - klistra in det i ett nytt R-skript.
 Skriptet är ett **utkast**: leta efter rader som börjar med `# OBS:` -
 de markerar ställen där inspelningen var osäker och du bör dubbelkolla
 eller komplettera för hand. Annars går det oftast att köra rakt av.
+Inspelningen identifierar varje klick i turordning id → `aria-label`
+(vanligt på ikonknappar utan synlig text) → unik text → unik klass+text
+→ DOM-position som sista utväg - ju tidigare i den listan, desto
+stabilare blir raden mellan olika körningar.
 
 Detta är det rekommenderade sättet att börja - även om du tänker skriva
 om eller finslipa skriptet för hand efteråt, sparar det mycket tid att
