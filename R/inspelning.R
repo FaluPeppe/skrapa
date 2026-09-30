@@ -174,7 +174,7 @@ injicera_inspelning <- function(skrap) {
         return n;
       }
       // Som textAntal(), men för aria-label - avgörande för ikonknappar
-      // (stäng-kryss, pilar, "tre punkter"-menyer m.fl.) som saknar synlig
+      // (stäng-kryss, pilar, 'tre punkter'-menyer m.fl.) som saknar synlig
       // text helt, men nästan alltid har ett aria-label för skärmläsare.
       // Sådana attribut är i praktiken mycket stabilare än genererade
       // CSS-klasser (som t.ex. Material-UI ofta hashar om mellan builds).
@@ -194,9 +194,9 @@ injicera_inspelning <- function(skrap) {
       //    href som pekar på en vanlig filtyp.
       // 2. Osäkrare men fångar fler fall: den synliga texten eller
       //    aria-label innehåller ett ord som brukar användas på
-      //    nedladdningsknappar ("Ladda ner", "Exportera"/"Export",
-      //    "Download") - oavsett elementtyp. Fångar t.ex. knappar som
-      //    bygger filen med ren JS ("on the fly") utan någon href alls,
+      //    nedladdningsknappar ('Ladda ner', 'Exportera'/'Export',
+      //    'Download') - oavsett elementtyp. Fångar t.ex. knappar som
+      //    bygger filen med ren JS ('on the fly') utan någon href alls,
       //    men kan ge falska positiver om en knapp råkar ha ett sånt ord
       //    i texten utan att faktiskt ladda ner något - därför markeras
       //    dessa som OSÄKRA i det genererade skriptet (se generera_skript()).
