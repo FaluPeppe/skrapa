@@ -189,16 +189,25 @@ injicera_inspelning <- function(skrap) {
         return n;
       }
 
-      // Gissar om ett klick sannolikt triggar en nedladdning: antingen ett
-      // uttryckligt download-attribut, eller en href som pekar på en
-      // vanlig filtyp. Kan inte se knappar som triggar nedladdning via ren
-      // JS utan href (t.ex. en 'Exportera'-knapp som bygger filen on the
-      // fly) - de missas här och får hanteras manuellt i efterhand.
-      function troligNedladdning(el, tag) {
-        if (tag !== 'a') return false;
-        if (el.hasAttribute('download')) return true;
-        var href = el.href || '';
-        return /\\.(xlsx|xls|csv|pdf|zip|docx|pptx|txt|json)(\\?|#|$)/i.test(href);
+      // Gissar om ett klick sannolikt triggar en nedladdning. Två vägar:
+      // 1. Säkrast: en länk med ett uttryckligt download-attribut, eller en
+      //    href som pekar på en vanlig filtyp.
+      // 2. Osäkrare men fångar fler fall: den synliga texten eller
+      //    aria-label innehåller ett ord som brukar användas på
+      //    nedladdningsknappar ("Ladda ner", "Exportera"/"Export",
+      //    "Download") - oavsett elementtyp. Fångar t.ex. knappar som
+      //    bygger filen med ren JS ("on the fly") utan någon href alls,
+      //    men kan ge falska positiver om en knapp råkar ha ett sånt ord
+      //    i texten utan att faktiskt ladda ner något - därför markeras
+      //    dessa som OSÄKRA i det genererade skriptet (se generera_skript()).
+      function troligNedladdning(el, tag, text, aria) {
+        if (tag === 'a') {
+          if (el.hasAttribute('download')) return true;
+          var href = el.href || '';
+          if (/\\.(xlsx|xls|csv|pdf|zip|docx|pptx|txt|json)(\\?|#|$)/i.test(href)) return true;
+        }
+        var etikett = ((text || '') + ' ' + (aria || '')).toLowerCase();
+        return /ladda ner|export|download/.test(etikett);
       }
 
       function beskriv(el) {
@@ -224,7 +233,7 @@ injicera_inspelning <- function(skrap) {
           aria_label: aria,
           aria_label_antal: ariaAntal(aria),
           href: (tag === 'a') ? (el.href || null) : null,
-          nedladdning: troligNedladdning(el, tag)
+          nedladdning: troligNedladdning(el, tag, text, aria)
         };
       }
 
@@ -592,10 +601,13 @@ generera_rad <- function(rad) {
 #' Generera ett komplett R-skript från en logg av inspelade händelser
 #'
 #' Klick som ser ut att trigga en nedladdning (identifierat vid
-#' inspelningstillfället - se `troligNedladdning()` i injicera_inspelning(),
-#' `download`-attribut eller en href mot en vanlig filtyp) wrappas
-#' automatiskt i `hamta_nedladdning()` istället för ett bart klick, och
-#' numreras (`fil_1`, `fil_2`, ...) om flera förekommer.
+#' inspelningstillfället - se `troligNedladdning()` i injicera_inspelning():
+#' antingen säkert via ett `download`-attribut/en href mot en vanlig
+#' filtyp, eller osäkrare via ord som "Ladda ner"/"Exportera"/"Download" i
+#' elementets text eller aria-label) wrappas automatiskt i
+#' `hamta_nedladdning()` istället för ett bart klick, och numreras
+#' (`fil_1`, `fil_2`, ...) om flera förekommer. En OBS-kommentar i
+#' skriptet påminner om att träffen inte är helt säker.
 #'
 #' @param handelser Tibble från lasa_av_inspelning() (kan vara flera
 #'   sammanslagna omgångar).
@@ -630,7 +642,7 @@ generera_skript <- function(handelser, url = NULL,
     }
     lank <- if (is.na(rad$href)) "okänd" else rad$href
     sprintf(
-      'fil_%d <- hamta_nedladdning(\n  skrap,\n  trigger = function() {\n    %s\n  },\n  nedladdningsmapp = nedladdningsmapp\n)  # OBS: satt monster (t.ex. "\\\\.xlsx$") om flera filtyper kan laddas ner. Länk: %s',
+      '# OBS: detta klick har identifierats som en TROLIG nedladdning (inte\n# helt säkert) - kontrollera att det faktiskt laddar ner en fil, och\n# ta bort hamta_nedladdning()-inslagningen nedan om det inte gör det.\nfil_%d <- hamta_nedladdning(\n  skrap,\n  trigger = function() {\n    %s\n  },\n  nedladdningsmapp = nedladdningsmapp\n)  # OBS: satt monster (t.ex. "\\\\.xlsx$") om flera filtyper kan laddas ner. Länk: %s',
       rad$nedladdning_nr, gsub("\n", "\n    ", uttryck), lank
     )
   }

@@ -25,8 +25,11 @@ En sammanhängande textsträng med R-kod.
 }
 \description{
 Klick som ser ut att trigga en nedladdning (identifierat vid
-inspelningstillfället - se \code{troligNedladdning()} i injicera_inspelning(),
-\code{download}-attribut eller en href mot en vanlig filtyp) wrappas
-automatiskt i \code{hamta_nedladdning()} istället för ett bart klick, och
-numreras (\code{fil_1}, \code{fil_2}, ...) om flera förekommer.
+inspelningstillfället - se \code{troligNedladdning()} i injicera_inspelning():
+antingen säkert via ett \code{download}-attribut/en href mot en vanlig
+filtyp, eller osäkrare via ord som "Ladda ner"/"Exportera"/"Download" i
+elementets text eller aria-label) wrappas automatiskt i
+\code{hamta_nedladdning()} istället för ett bart klick, och numreras
+(\code{fil_1}, \code{fil_2}, ...) om flera förekommer. En OBS-kommentar i
+skriptet påminner om att träffen inte är helt säker.
 }
