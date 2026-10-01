@@ -161,11 +161,17 @@ klicka_via_id(skrap, "#knapp", timeout_finns = 20)
 
 **Går inte att scrolla ner till botten av sidan i ett synligt fönster**
 (vanligt under `kor_inspelningsgadget()` eller `headless = FALSE`). chromote
-tvingar fram en fast virtuell skärmstorlek (`bredd`/`hojd`, default `1920`×
-`1400`) via Chrome DevTools-protokollet - helt oberoende av hur stort det
-riktiga webbläsarfönstret är på din skärm. Är din skärm/fönster större än
-det, kan mus-scroll hamna utanför det Chrome faktiskt tror är synligt.
-Höj `hojd` (och `bredd`) så de matchar din skärm:
+tvingar fram en fast virtuell skärmstorlek (`bredd`/`hojd`) via Chrome
+DevTools-protokollet - helt oberoende av hur stort det riktiga
+webbläsarfönstret är på din skärm. Är skärmen större än den virtuella
+storleken klipps sidan av längst ner/till höger: det innehållet renderas
+aldrig alls, oavsett hur mycket man scrollar.
+
+I ett synligt fönster (`headless = FALSE`) matchas viewporten numera
+**automatiskt** mot det riktiga fönstrets storlek, så det här ska i
+normalfallet inte längre hända. Händer det ändå (t.ex. en ovanlig
+Chrome-version där avläsningen misslyckas) kan du ange `hojd`/`bredd`
+manuellt för att override:a auto-matchningen:
 
 ```r
 kor_inspelningsgadget(url = "...", hojd = 1800, bredd = 2200)

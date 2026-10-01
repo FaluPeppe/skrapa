@@ -11,8 +11,8 @@ starta_skrapsession(
   profil_dir = tempfile("edge-profil-"),
   timeout = 15,
   view = FALSE,
-  bredd = 1920,
-  hojd = 1400,
+  bredd = NULL,
+  hojd = NULL,
   user_agent = NULL
 )
 }
@@ -38,15 +38,18 @@ för att synas). Default FALSE.}
 
 \item{bredd}{Viewportens bredd i pixlar. chromote tvingar fram en fast
 virtuell skärmstorlek via Chrome DevTools-protokollet oberoende av det
-faktiska OS-fönstrets storlek - höj den här om sidan bara syns i en
-smal kolumn trots ett maximerat fönster.}
+faktiska OS-fönstrets storlek. Default NULL: i ett synligt fönster
+(\code{headless = FALSE}) läses den riktiga fönsterstorleken av automatiskt
+och viewporten matchas mot den - annars (headless) används \code{1920}.
+Ange ett eget värde för att override:a auto-matchningen.}
 
-\item{hojd}{Viewportens höjd i pixlar. Samma sak som \code{bredd}: låst av
-Chrome DevTools-protokollet oberoende av fönstrets faktiska storlek.
-Går det INTE att scrolla ner till botten av sidan i en synlig session
-(\code{headless = FALSE}, t.ex. under \code{kor_inspelningsgadget()}) beror det
-nästan alltid på att den riktiga skärmen/fönstret är större än denna
-virtuella höjd - höj \code{hojd} (och \code{bredd}) tills det matchar din skärm.}
+\item{hojd}{Viewportens höjd i pixlar. Samma automatiska matchning som
+\code{bredd} (default NULL, \code{1400} i headless-läge). Gick det tidigare
+INTE att scrolla ner till botten av sidan i en synlig session - sidan
+klipptes helt enkelt av vid en virtuell höjd som var lägre än det
+riktiga fönstret - ska auto-matchningen lösa det problemet av sig
+själv. Ange ett eget värde bara om auto-matchningen av någon
+anledning misslyckas eller ger fel resultat.}
 
 \item{user_agent}{Valfri user agent-sträng. I headless-läge innehåller
 standard-UA:n "HeadlessChrome", vilket enkla botskydd känner igen -
@@ -71,6 +74,11 @@ spawnar en hjälpprocess (supervisor.exe) som ofta blockeras av
 AppLocker/gruppolicy på företagsdatorer. supervise = FALSE undviker det
 helt, samtidigt som vi får ett processobjekt med $get_pid()/$kill() att
 städa bort sessionen med senare.
+
+I ett synligt fönster (\code{headless = FALSE}) läses det riktiga fönstrets
+storlek av automatiskt (se \code{matcha_viewport_mot_fonster()}) och viewporten
+matchas mot den, så att sidan inte klipps av i botten/högerkanten om
+skärmen råkar vara större än det som tidigare var ett fast standardvärde.
 }
 \examples{
 \dontrun{

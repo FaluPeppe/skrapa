@@ -227,6 +227,47 @@ test_internetanslutning <- function(url = "https://raw.githubusercontent.com", t
   }, error = function(e) FALSE)
 }
 
+#' Läs av det riktiga webbläsarfönstrets storlek, för att matcha viewporten
+#' mot den (intern)
+#'
+#' chromote tvingar annars fram en fast virtuell skärmstorlek via Chrome
+#' DevTools-protokollet, helt oberoende av hur stort det faktiska,
+#' synliga fönstret är - skärmen kan vara mycket större än den virtuella
+#' storleken (t.ex. om standardvärdet bara råkar passa en mindre skärm än
+#' användarens), vilket gör att sidan klipps av i botten/högerkanten: det
+#' innehåll som ligger bortom den virtuella storleken renderas aldrig,
+#' oavsett hur mycket man scrollar - inte bara "osynligt bakom en
+#' scrollbar". Löser det genom att öppna en kort-levad extra CDP-session
+#' mot webbläsarens (redan maximerade) första flik, läsa av dess faktiska
+#' renderbara yta via `Page.getLayoutMetrics()`, och stänga sessionen
+#' igen - utan att röra den session som själva skrapningen sedan använder.
+#'
+#' @param chrom Ett Chromote-objekt (fältet `chrom` i ett skrapsession-
+#'   objekt, eller motsvarande under uppstart).
+#' @return En lista med `bredd`/`hojd` i pixlar.
+matcha_viewport_mot_fonster <- function(chrom) {
+  sess_tmp <- chrom$new_session()
+  on.exit(try(sess_tmp$close(), silent = TRUE), add = TRUE)
+
+  try(sess_tmp$Page$enable(), silent = TRUE)
+  metrics <- sess_tmp$Page$getLayoutMetrics()
+
+  # Faltnamnen har skiftat nagot mellan versioner av Chrome DevTools-
+  # protokollet (aldre: visualViewport/layoutViewport, nyare:
+  # cssVisualViewport/cssLayoutViewport) - forsok i tur och ordning.
+  vp <- metrics$cssVisualViewport %||% metrics$visualViewport %||%
+    metrics$cssLayoutViewport %||% metrics$layoutViewport
+
+  bredd <- vp$clientWidth
+  hojd <- vp$clientHeight
+  if (is.null(bredd) || is.null(hojd) || !is.numeric(bredd) || !is.numeric(hojd) ||
+      bredd <= 0 || hojd <= 0) {
+    stop("Kunde inte lasa av webblasarfonstrets storlek via CDP.")
+  }
+
+  list(bredd = round(bredd), hojd = round(hojd))
+}
+
 #' Starta en skrapsession (Edge + chromote + selenider)
 #'
 #' Startar Microsoft Edge headless med en fjärrfelsökningsport, ansluter
@@ -256,14 +297,17 @@ test_internetanslutning <- function(url = "https://raw.githubusercontent.com", t
 #'   för att synas). Default FALSE.
 #' @param bredd Viewportens bredd i pixlar. chromote tvingar fram en fast
 #'   virtuell skärmstorlek via Chrome DevTools-protokollet oberoende av det
-#'   faktiska OS-fönstrets storlek - höj den här om sidan bara syns i en
-#'   smal kolumn trots ett maximerat fönster.
-#' @param hojd Viewportens höjd i pixlar. Samma sak som `bredd`: låst av
-#'   Chrome DevTools-protokollet oberoende av fönstrets faktiska storlek.
-#'   Går det INTE att scrolla ner till botten av sidan i en synlig session
-#'   (`headless = FALSE`, t.ex. under `kor_inspelningsgadget()`) beror det
-#'   nästan alltid på att den riktiga skärmen/fönstret är större än denna
-#'   virtuella höjd - höj `hojd` (och `bredd`) tills det matchar din skärm.
+#'   faktiska OS-fönstrets storlek. Default NULL: i ett synligt fönster
+#'   (`headless = FALSE`) läses den riktiga fönsterstorleken av automatiskt
+#'   och viewporten matchas mot den - annars (headless) används `1920`.
+#'   Ange ett eget värde för att override:a auto-matchningen.
+#' @param hojd Viewportens höjd i pixlar. Samma automatiska matchning som
+#'   `bredd` (default NULL, `1400` i headless-läge). Gick det tidigare
+#'   INTE att scrolla ner till botten av sidan i en synlig session - sidan
+#'   klipptes helt enkelt av vid en virtuell höjd som var lägre än det
+#'   riktiga fönstret - ska auto-matchningen lösa det problemet av sig
+#'   själv. Ange ett eget värde bara om auto-matchningen av någon
+#'   anledning misslyckas eller ger fel resultat.
 #' @param user_agent Valfri user agent-sträng. I headless-läge innehåller
 #'   standard-UA:n "HeadlessChrome", vilket enkla botskydd känner igen -
 #'   ange en vanlig webbläsar-UA här för att undvika det.
@@ -287,8 +331,8 @@ starta_skrapsession <- function(port = NULL,
                                 profil_dir = tempfile("edge-profil-"),
                                 timeout = 15,
                                 view = FALSE,
-                                bredd = 1920,
-                                hojd = 1400,
+                                bredd = NULL,
+                                hojd = NULL,
                                 user_agent = NULL) {
   
   # Kolla internetanslutning forst - ger ett tydligt fel direkt istallet for
@@ -377,7 +421,24 @@ starta_skrapsession <- function(port = NULL,
   
   b <- chromote::ChromeRemote$new(host = "127.0.0.1", port = port)
   chrom <- chromote::Chromote$new(browser = b)
-  
+
+  # bredd/hojd = NULL -> matcha viewporten mot det riktiga fonstret om ett
+  # sadant finns (headless = FALSE), annars fall tillbaka pa ett rimligt
+  # fast varde (det finns ju inget riktigt fonster att matcha i headless-
+  # lage). Lyckas auto-matchningen inte av nagon anledning (ovantad
+  # CDP-version, fonstret hann inte renderas klart etc.) faller den tillbaka
+  # pa samma fasta varde - en misslyckad auto-matchning ska aldrig stoppa
+  # hela sessionen fran att starta.
+  if (is.null(bredd) || is.null(hojd)) {
+    auto <- if (!isTRUE(headless)) {
+      tryCatch(matcha_viewport_mot_fonster(chrom), error = function(e) NULL)
+    } else {
+      NULL
+    }
+    if (is.null(bredd)) bredd <- if (!is.null(auto)) auto$bredd else 1920
+    if (is.null(hojd))  hojd  <- if (!is.null(auto)) auto$hojd  else 1400
+  }
+
   session <- selenider::selenider_session(
     options = selenider::chromote_options(parent = chrom, width = bredd, height = hojd),
     view = view,
