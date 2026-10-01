@@ -188,6 +188,16 @@ Kör `visa_kontroller(skrap)` på sidan du vill skrapa (se ovan), eller
 spela in ditt agerande med `kor_inspelningsgadget()` istället för att
 leta upp selektorer för hand.
 
+**Tidigare val/filter sitter kvar när jag testar om ett skript**
+(vanligt om du kör om samma skript flera gånger i samma R-session, utan
+att starta en ny `starta_skrapsession()`). Kör `rensa_webblasardata(skrap)`
+i början av testskriptet - den rensar cookies/localStorage/sessionStorage
+och laddar om sidan, ungefär som ett första besök. Tänk på att du då
+troligen loggas ut om sidan kräver inloggning, och att en eventuell
+cookie-banner kan dyka upp igen - använd den därför bara när du faktiskt
+behöver den, inte som standard i ett färdigt produktionsskript (som ändå
+normalt körs i en helt ny, redan tom session varje gång).
+
 ## Paketets innehåll, kort
 
 - `R/skrapning.R` - kärnfunktionerna: starta/stäng session, klicka, fylla

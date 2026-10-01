@@ -1607,6 +1607,69 @@ with_skrapsession <- function(expr, ...) {
   eval(substitute(expr), envir = list(skrap = skrap), enclos = parent.frame())
 }
 
+#' Rensa cookies, localStorage och sessionStorage i en skrapsession
+#'
+#' Bra att köra i BÖRJAN av ett testskript (eller mellan testkörningar i
+#' samma R-session) om en sidas tidigare val/filter sitter kvar och stör -
+#' t.ex. om du kör om ett inspelat skript flera gånger i samma skrapsession
+#' utan att starta en ny. Rensar webbläsarens cookies och cache (via Chrome
+#' DevTools-protokollet, för ALLA domäner som laddats i sessionen, inte
+#' bara huvuddokumentet) samt `localStorage`/`sessionStorage` för aktuell
+#' sida, och laddar därefter om sidan (default) så att den startar om helt
+#' från grunden - ungefär som ett första besök.
+#'
+#' Behövs OFTAST inte: varje `starta_skrapsession()` skapar redan en ny,
+#' helt isolerad temp-profil (`profil_dir`) per körning, så cookies/
+#' localStorage är redan garanterat tomma mellan två SEPARATA R-sessioner.
+#' Den här funktionen är till för att nollställa en sida UTAN att behöva
+#' starta om hela skrapsessionen - typiskt praktiskt under testning/
+#' utveckling av ett skript, snarare än i ett färdigt produktionsskript
+#' (som normalt ändå körs i en helt ny session varje gång).
+#'
+#' OBS - två saker att tänka på innan du kör den:
+#' - Är du inloggad på sidan loggas du med STOR sannolikhet ut, eftersom
+#'   inloggning vanligtvis sitter i en cookie/localStorage. Kör
+#'   inloggningen på nytt efter rensningen om så behövs.
+#' - Eventuella cookie-samtycken ("Vi använder cookies...") återställs
+#'   också, så en sådan banner kan dyka upp igen efter omladdningen och
+#'   behöva klickas bort på nytt.
+#'
+#' Av just de anledningarna körs den INTE automatiskt av
+#' `starta_skrapsession()` eller något annat i paketet - du kallar på den
+#' själv, bara när och om du faktiskt behöver den.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param ladda_om Om sidan ska laddas om efter rensningen. Default TRUE.
+#'   Sätt till FALSE om du själv vill styra navigeringen efteråt (t.ex.
+#'   med selenider::open_url() till en annan adress).
+#'
+#' @return Inget (osynligt TRUE).
+#'
+#' @examples
+#' \dontrun{
+#' skrap <- starta_skrapsession()
+#' selenider::open_url(skrap$session, "https://exempel.se/statistik")
+#' # ... testar skriptet, vill borja om helt ...
+#' rensa_webblasardata(skrap)
+#' }
+#' @export
+rensa_webblasardata <- function(skrap, ladda_om = TRUE) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+
+  try(skrap$chrom$Network$clearBrowserCookies(), silent = TRUE)
+  try(skrap$chrom$Network$clearBrowserCache(), silent = TRUE)
+  try(kor_js(skrap, "localStorage.clear(); sessionStorage.clear(); true;"), silent = TRUE)
+
+  if (isTRUE(ladda_om)) {
+    skrap$session$driver$Page$reload(ignoreCache = TRUE)
+    vanta_pa_sidladdning(skrap)
+  }
+
+  invisible(TRUE)
+}
+
 #' Ställ in var Edge ska spara nedladdade filer
 #'
 #' Talar om för Chrome DevTools-protokollet att nedladdningar ska tillåtas
