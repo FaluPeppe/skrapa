@@ -692,6 +692,12 @@ generera_skript <- function(handelser, url = NULL,
 #' eller är urklipp otillgängligt i miljön, skrivs bara ett meddelande om
 #' det istället, skriptet skrivs ut ändå).
 #'
+#' Stängs det synliga webbläsarfönstret manuellt (istället för att trycka
+#' Done/Cancel i gadgeten) upptäcks det automatiskt inom en halv sekund -
+#' gadgeten avslutas då på samma sätt som Done (skriptet för det som redan
+#' hanns spelas in skrivs ut/kopieras), istället för att fastna i en
+#' oändlig loop av "Session and underlying target have been closed"-fel.
+#'
 #' @param url Valfri adress att öppna direkt vid start.
 #' @param nedladdningsmapp Läggs in i det genererade skriptets huvud som
 #'   `nedladdningsmapp <- ...`, om minst en nedladdning spelas in.
@@ -762,7 +768,21 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
     shiny::observe({
       timer()
       if (isTRUE(pausad())) return()
-      
+
+      # Stangs webblasarfonstret av anvandaren (istallet for Done/Cancel i
+      # gadgeten) dor Edge-processen, och varje efterfoljande pollning skulle
+      # annars bara stapla pa sig samma "Session and underlying target have
+      # been closed"-fel 2 ganger/sekund i all evighet tills anvandaren sjalv
+      # trycker Cancel. Kollar darfor om processen fortfarande lever INNAN
+      # den forsoker prata med den, och avslutar da gadgeten automatiskt -
+      # pa samma satt som Done (det som redan spelats in ska inte ga forlorat
+      # bara for att webblasaren stangdes för tidigt).
+      if (!skrap$process$is_alive()) {
+        message("[inspelning] Webblasaren verkar ha stangts - avslutar inspelningen automatiskt.")
+        avsluta_med_skript()
+        return()
+      }
+
       # Återinjicera vid varje tick - idempotent, och avgörande efter en
       # sidladdning (t.ex. cookiebanner-val som gör en full reload), då
       # webbläsarens JS-kontext nollställs och lyssnaren från förra sidan
@@ -777,7 +797,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
           message("[inspelning] injicera_inspelning fel: ", conditionMessage(e))
         }
       )
-      
+
       nya <- tryCatch(
         lasa_av_inspelning(skrap),
         error = function(e) {
@@ -839,10 +859,15 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
       generera_skript(handelser(), url = url, nedladdningsmapp = nedladdningsmapp)
     })
     
-    shiny::observeEvent(input$done, {
-      stang_skrapsession(skrap)
+    # Delad av input$done och auto-avslut nar webblasaren stangs av
+    # anvandaren (se pollningsloopen ovan) - bygger och skriver ut det
+    # genererade skriptet, forsoker kopiera det till urklipp, och avslutar
+    # gadgeten. stang_skrapsession() tal om en redan dod process/session
+    # fint (try()/tyst() internt), sa den ar sakstalld aven i auto-fallet.
+    avsluta_med_skript <- function() {
+      tryCatch(stang_skrapsession(skrap), error = function(e) NULL)
       skript <- generera_skript(handelser(), url = url, nedladdningsmapp = nedladdningsmapp)
-      
+
       cat(skript, "\n")
 
       # clipr::write_clip() ger (pa Windows, via utils::writeClipboard())
@@ -889,9 +914,11 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
           "manuellt från konsolen ovan."
         )
       }
-      
+
       shiny::stopApp(skript)
-    })
+    }
+
+    shiny::observeEvent(input$done, avsluta_med_skript())
     shiny::observeEvent(input$cancel, {
       stang_skrapsession(skrap)
       shiny::stopApp(invisible(NULL))

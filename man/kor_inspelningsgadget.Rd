@@ -29,6 +29,12 @@ När du trycker \strong{Done} skrivs det genererade skriptet ut i konsolen med
 \code{cat()}, och kopieras till urklipp (kräver paketet \code{clipr} - saknas det,
 eller är urklipp otillgängligt i miljön, skrivs bara ett meddelande om
 det istället, skriptet skrivs ut ändå).
+
+Stängs det synliga webbläsarfönstret manuellt (istället för att trycka
+Done/Cancel i gadgeten) upptäcks det automatiskt inom en halv sekund -
+gadgeten avslutas då på samma sätt som Done (skriptet för det som redan
+hanns spelas in skrivs ut/kopieras), istället för att fastna i en
+oändlig loop av "Session and underlying target have been closed"-fel.
 }
 \examples{
 \dontrun{
