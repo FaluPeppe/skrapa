@@ -23,7 +23,7 @@
 # att det är odefinierade globala variabler.
 utils::globalVariables(c(
   "hantelse", "tag", "id", "klass", "text", "vald_text", "varde",
-  "iframe", "sokvag", "aria_label"
+  "iframe", "sokvag", "aria_label", "title"
 ))
 
 # --- 0. Städa policy-styrda extra-flikar ------------------------------------
@@ -188,6 +188,19 @@ injicera_inspelning <- function(skrap) {
         } catch (err) { return -1; }
         return n;
       }
+      // Som ariaAntal(), men för title-attributet - samma idé som
+      // aria-label, men vissa ikonknappar (t.ex. ett exportplugin till ett
+      // kartbibliotek) exponerar bara en tooltip via title, inte aria-label.
+      function titleAntal(title) {
+        if (!title) return -1;
+        var n = 0;
+        try {
+          document.querySelectorAll('[title]').forEach(function(e) {
+            if (e.getAttribute('title') === title) n++;
+          });
+        } catch (err) { return -1; }
+        return n;
+      }
 
       // Gissar om ett klick sannolikt triggar en nedladdning. Två vägar:
       // 1. Säkrast: en länk med ett uttryckligt download-attribut, eller en
@@ -215,6 +228,7 @@ injicera_inspelning <- function(skrap) {
         var text = (el.textContent || '').trim().slice(0, 200);
         var klass = el.className && typeof el.className === 'string' ? el.className : null;
         var aria = el.getAttribute('aria-label') || null;
+        var title = el.getAttribute('title') || null;
         return {
           tag: tag,
           id: el.id || null,
@@ -232,6 +246,8 @@ injicera_inspelning <- function(skrap) {
           klass_text_antal: klassTextAntal(klass, text, tag),
           aria_label: aria,
           aria_label_antal: ariaAntal(aria),
+          title: title,
+          title_antal: titleAntal(title),
           href: (tag === 'a') ? (el.href || null) : null,
           nedladdning: troligNedladdning(el, tag, text, aria)
         };
@@ -251,16 +267,19 @@ injicera_inspelning <- function(skrap) {
         // förälder med egen text om man träffat en ikon/span utan text
         // inuti 'knappen' (max 4 nivåer, för att inte hamna på en
         // container som råkar innehålla mycket annan text också).
-        // Stannar ÄVEN på ett element med eget aria-label (vanligt på
-        // ikonknappar utan synlig text, t.ex. en stäng-kryss) - annars
-        // klättrar loopen förbi just det elementet (aria-label räknas
-        // inte som textContent) och tappar den enda pålitliga
-        // identifieraren knappen faktiskt hade.
+        // Stannar ÄVEN på ett element med eget aria-label ELLER title
+        // (vanligt på ikonknappar utan synlig text, t.ex. en stäng-kryss
+        // eller en knapp från ett tredjepartsbibliotek som bara sätter en
+        // tooltip via title) - annars klättrar loopen förbi just det
+        // elementet (varken aria-label eller title räknas som
+        // textContent) och tappar den enda pålitliga identifieraren
+        // knappen faktiskt hade.
         var el = e.target;
         var niva = 0;
         while (el && el !== document.body &&
                !(el.textContent || '').trim() &&
                !el.getAttribute('aria-label') &&
+               !el.getAttribute('title') &&
                niva < 4) {
           el = el.parentElement;
           niva++;
@@ -348,6 +367,7 @@ lasa_av_inspelning <- function(skrap) {
       vald_text = character(), iframe = character(), sokvag = character(),
       text_antal = double(), klass_text_antal = double(),
       aria_label = character(), aria_label_antal = double(),
+      title = character(), title_antal = double(),
       href = character(), nedladdning = logical()
     ))
   }
@@ -361,6 +381,7 @@ lasa_av_inspelning <- function(skrap) {
       vald_text = character(), iframe = character(), sokvag = character(),
       text_antal = double(), klass_text_antal = double(),
       aria_label = character(), aria_label_antal = double(),
+      title = character(), title_antal = double(),
       href = character(), nedladdning = logical()
     ))
   }
@@ -383,6 +404,8 @@ lasa_av_inspelning <- function(skrap) {
       klass_text_antal = h$klass_text_antal %||% NA_real_,
       aria_label = h$aria_label %||% NA_character_,
       aria_label_antal = h$aria_label_antal %||% NA_real_,
+      title = h$title %||% NA_character_,
+      title_antal = h$title_antal %||% NA_real_,
       href = h$href %||% NA_character_,
       nedladdning = h$nedladdning %||% FALSE
     )
@@ -428,12 +451,19 @@ vanta_kor_js <- function(skrap, js, timeout = 10, intervall = 0.2) {
 
 #' Bygg ett R-uttryck (som text) för en enskild inspelad händelse
 #'
-#' Prioritetsordning: id först (unikt per HTML-spec), därefter aria-label
-#' (om unikt på sidan) - avgörande för ikonknappar utan synlig text, som
-#' annars bara kan identifieras via den bräckliga DOM-sökvägen - därefter
-#' den svagaste identifieraren som vid inspelningstillfället faktiskt
-#' bekräftats vara unik på sidan (text ensamt, sedan klass+text) - annars
-#' kor_js() med den inspelade DOM-sökvägen som sista utväg. Svelte-typ
+#' För klick: samlar ALLA identifierare som faktiskt bekräftades vara
+#' unika vid inspelningstillfället (inte bara den "bästa") i fallande
+#' tillförlitlighetsordning - id (unikt per HTML-spec), aria-label,
+#' title (båda avgörande för ikonknappar utan synlig text, och ofta
+#' stabilare än genererade CSS-klasser som t.ex. Material-UI kan hasha
+#' om mellan driftsättningar), unik text, unik klass+text, och till sist
+#' den inspelade DOM-sökvägen (garanterat unik, men känslig för att
+#' positionen kan skifta mellan inspelning och körning). Finns bara EN
+#' kandidat genereras en enkel, fristående rad
+#' (klicka_via_id()/klicka_via_text()/klicka_via_klass_och_text()).
+#' Finns FLERA genereras istället en klicka_robust()-rad som provar dem i
+#' tur och ordning vid körning - se klicka_robust() för hur man senare
+#' trimmar bort kandidater som visar sig onödiga. Svelte-typ
 #' "scoped"-klasser (t.ex. "svelte-zhv9wr") filtreras bort eftersom de är
 #' instabila mellan builds.
 #'
@@ -478,63 +508,105 @@ generera_rad <- function(rad) {
   if (rad$hantelse == "click") {
     klass_stadad <- stad_klass(rad$klass)
     ifr <- iframe_arg(rad$iframe)
-    kor_js_fallback <- function() {
-      if (!is.na(rad$sokvag) && nzchar(rad$sokvag)) {
-        sprintf(
-          'traff <- vanta_kor_js(skrap, \'var el = document.querySelector("%s"); if (el) el.click(); !!el;\')  # OBS: sökväg via DOM-position (tag=%s) - bräckligt, verifiera\nstopifnot("Hittade inte klickmål (sökväg: %s)" = isTRUE(traff))',
-          js_stad(rad$sokvag), rad$tag, js_stad(rad$sokvag)
-        )
+
+    # Bygg textrepresentationen av EN kandidat for infogning i en
+    # klicka_robust(skrap, list(...))-rad.
+    kandidat_till_listrad <- function(kandidat) {
+      if (identical(kandidat$typ, "css")) {
+        return(sprintf("list(typ = \"css\", css = '%s')", gsub("'", "\\\\'", kandidat$css)))
+      }
+      if (identical(kandidat$typ, "text")) {
+        return(sprintf('list(typ = "text", text = "%s")', kandidat$text))
+      }
+      sprintf(
+        'list(typ = "klass_text", klass = "%s", text = "%s", tag = "%s")',
+        kandidat$klass, kandidat$text, kandidat$tag
+      )
+    }
+
+    # Samma kandidat, men som en fristaende rad (klicka_via_id()/
+    # klicka_via_text()/klicka_via_klass_och_text()) - anvands nar det bara
+    # finns EN kandidat, sa skriptet slipper dra in klicka_robust() for
+    # inget (dodvikt) nar det anda inte finns nagot att falla tillbaka pa.
+    kandidat_till_enkel_kod <- function(kandidat) {
+      kod <- if (identical(kandidat$typ, "css")) {
+        sprintf("klicka_via_id(skrap, '%s'%s)", gsub("'", "\\\\'", kandidat$css), ifr)
+      } else if (identical(kandidat$typ, "text")) {
+        sprintf('klicka_via_text(skrap, "%s"%s)', kandidat$text, ifr)
       } else {
         sprintf(
-          '# OBS: kunde inte generera klick automatiskt (tag=%s, ingen id/klass/text/sökväg) - komplettera manuellt',
-          rad$tag
+          'klicka_via_klass_och_text(skrap, klass = "%s", text = "%s", tag = "%s"%s)',
+          kandidat$klass, kandidat$text, kandidat$tag, ifr
         )
       }
+      if (!is.null(kandidat$varning)) {
+        kod <- paste0(kod, "  # OBS: ", kandidat$varning)
+      }
+      kod
     }
-    
-    # Prioritetsordning: id (alltid unikt per HTML-spec) - därefter aria-label
-    # (om unikt) - avgörande för ikonknappar utan synlig text (stäng-kryss,
-    # pilar, "tre punkter"-menyer m.fl.), som annars bara kan identifieras
-    # via den bräckliga DOM-sökvägen. aria-label är dessutom ofta stabilare
-    # än genererade CSS-klasser, som t.ex. Material-UI kan hasha om mellan
-    # driftsättningar - därefter den SVAGASTE identifieraren som ändå
-    # faktiskt är unik på sidan, kollat vid inspelningstillfället
-    # (text_antal/klass_text_antal). Är inget av ovan unikt (t.ex. fem
-    # "Nästa"-knappar) ger ingen av bibliotekets funktioner en pålitlig
-    # träff - då används kor_js() med den inspelade DOM-sökvägen istället,
-    # som är garanterat unik eftersom den bygger på elementets faktiska
-    # position (men känslig för att den positionen kan ändras mellan
-    # inspelning och körning, se README).
+
+    # Samla ALLA identifierare som faktiskt bekraftades vara unika vid
+    # inspelningstillfallet - inte bara den "basta" - i fallande
+    # tillforlitlighetsordning: id (alltid unikt per HTML-spec) -> aria-label
+    # -> title (bada avgorande for ikonknappar utan synlig text, och ofta
+    # stabilare an genererade CSS-klasser som t.ex. Material-UI kan hasha om
+    # mellan driftsattningar) -> unik text -> unik klass+text -> den
+    # inspelade DOM-sokvagen som sista utvag (garanterat unik, men kanslig
+    # for att positionen kan skifta mellan inspelning och korning).
+    #
+    # Finns det BARA en kandidat genereras en enkel, fristaende rad som
+    # innan. Finns det FLERA genereras istallet en klicka_robust()-rad som
+    # provar dem i tur och ordning vid korning - se klicka_robust() for
+    # hur man senare trimmar bort de kandidater som visar sig onodiga.
+    kandidater <- list()
     if (!is.na(rad$id) && nzchar(rad$id)) {
-      return(sprintf('klicka_via_id(skrap, "#%s"%s)', rad$id, ifr))
+      kandidater[[length(kandidater) + 1]] <- list(typ = "css", css = paste0("#", rad$id))
     }
     if (!is.na(rad$aria_label) && nzchar(rad$aria_label) &&
         !is.na(rad$aria_label_antal) && rad$aria_label_antal == 1) {
-      return(sprintf(
-        'klicka_via_id(skrap, \'[aria-label="%s"]\'%s)',
-        aria_stad(rad$aria_label), ifr
-      ))
+      kandidater[[length(kandidater) + 1]] <- list(
+        typ = "css", css = sprintf('[aria-label="%s"]', aria_stad(rad$aria_label))
+      )
+    }
+    if (!is.na(rad$title) && nzchar(rad$title) &&
+        !is.na(rad$title_antal) && rad$title_antal == 1) {
+      kandidater[[length(kandidater) + 1]] <- list(
+        typ = "css", css = sprintf('[title="%s"]', aria_stad(rad$title))
+      )
     }
     if (!is.na(rad$text) && nzchar(rad$text) &&
         !is.na(rad$text_antal) && rad$text_antal == 1) {
-      return(sprintf('klicka_via_text(skrap, "%s"%s)', rad$text, ifr))
+      kandidater[[length(kandidater) + 1]] <- list(typ = "text", text = rad$text)
     }
     if (!is.na(klass_stadad) && !is.na(rad$text) && nzchar(rad$text) &&
         !is.na(rad$klass_text_antal) && rad$klass_text_antal == 1) {
       forsta_klass <- strsplit(klass_stadad, " ")[[1]][1]
+      kandidater[[length(kandidater) + 1]] <- list(
+        typ = "klass_text", klass = forsta_klass, text = rad$text, tag = rad$tag
+      )
+    }
+    if (!is.na(rad$sokvag) && nzchar(rad$sokvag)) {
+      kandidater[[length(kandidater) + 1]] <- list(
+        typ = "css", css = rad$sokvag,
+        varning = sprintf("sökväg via DOM-position (tag=%s) - bräckligt, verifiera", rad$tag)
+      )
+    }
+
+    if (length(kandidater) == 0) {
       return(sprintf(
-        'klicka_via_klass_och_text(skrap, klass = "%s", text = "%s", tag = "%s"%s)',
-        forsta_klass, rad$text, rad$tag, ifr
+        '# OBS: kunde inte generera klick automatiskt (tag=%s%s, ingen id/aria-label/title/text/klass/sökväg) - komplettera manuellt',
+        rad$tag,
+        if (!is.na(rad$iframe) && nzchar(rad$iframe)) sprintf(", iframe %s", rad$iframe) else ""
       ))
     }
-    # Inget av ovan var unikt bekräftat, men bara i huvuddokumentet -
-    # kor_js() med iframes stöds inte i det här utkastet.
-    if (is.na(rad$iframe)) {
-      return(kor_js_fallback())
+    if (length(kandidater) == 1) {
+      return(kandidat_till_enkel_kod(kandidater[[1]]))
     }
+
+    rader_kod <- vapply(kandidater, kandidat_till_listrad, character(1))
     return(sprintf(
-      '# OBS: klick i iframe (%s) utan garanterat unik id/text/klass - komplettera manuellt',
-      rad$iframe
+      'klicka_robust(skrap, list(\n    %s\n  )%s)',
+      paste(rader_kod, collapse = ",\n    "), ifr
     ))
   }
   
@@ -663,6 +735,13 @@ generera_skript <- function(handelser, url = NULL,
     "# innehåll (en klocka, en auto-uppdaterande widget) som gör att",
     "# DOM-väntan aldrig blir 'stabil', sätt dom_stabil_tid = NULL på",
     "# klick i den delen av skriptet.",
+    "#",
+    "# Klick där flera identifierare (id/aria-label/title/text/klass) visade",
+    "# sig unika vid inspelningen blir klicka_robust(skrap, list(...)) -",
+    "# den provar kandidaterna i tur och ordning och skriver ut (message())",
+    "# vilken som faktiskt träffade. Kör skriptet några gånger: visar det sig",
+    "# att samma kandidat alltid vinner kan du trimma raden till en enkel",
+    "# klicka_via_id()/klicka_via_text()-rad istället - se ?klicka_robust.",
     "",
     "library(skrapa)",
     "",
@@ -756,6 +835,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
         vald_text = character(), iframe = character(), sokvag = character(),
         text_antal = double(), klass_text_antal = double(),
         aria_label = character(), aria_label_antal = double(),
+        title = character(), title_antal = double(),
         href = character(), nedladdning = logical()
       )
     )
@@ -818,7 +898,7 @@ kor_inspelningsgadget <- function(url = NULL, nedladdningsmapp = "C:/temp/nedlad
     
     output$logg_tabell <- shiny::renderUI({
       df <- handelser() |>
-        dplyr::select(hantelse, tag, id, klass, text, aria_label, vald_text, varde, iframe, sokvag)
+        dplyr::select(hantelse, tag, id, klass, text, aria_label, title, vald_text, varde, iframe, sokvag)
       if (nrow(df) == 0) return(shiny::tags$em("Inga händelser inspelade ännu."))
       
       kolumner <- names(df)

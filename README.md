@@ -53,10 +53,14 @@ kopieras automatiskt till urklipp - klistra in det i ett nytt R-skript.
 Skriptet är ett **utkast**: leta efter rader som börjar med `# OBS:` -
 de markerar ställen där inspelningen var osäker och du bör dubbelkolla
 eller komplettera för hand. Annars går det oftast att köra rakt av.
-Inspelningen identifierar varje klick i turordning id → `aria-label`
-(vanligt på ikonknappar utan synlig text) → unik text → unik klass+text
-→ DOM-position som sista utväg - ju tidigare i den listan, desto
-stabilare blir raden mellan olika körningar.
+Inspelningen identifierar varje klick i turordning id → `aria-label`/
+`title` (vanligt på ikonknappar utan synlig text) → unik text → unik
+klass+text → DOM-position som sista utväg - ju tidigare i den listan,
+desto stabilare blir raden mellan olika körningar. Hittades fler än en
+av dessa blir raden `klicka_robust(skrap, list(...))` istället för en
+enkel `klicka_via_*()`-rad - den provar kandidaterna i tur och ordning
+och skriver ut vilken som faktiskt träffade, så du kan trimma bort
+onödiga kandidater längre fram (se `?klicka_robust`).
 
 Detta är det rekommenderade sättet att börja - även om du tänker skriva
 om eller finslipa skriptet för hand efteråt, sparar det mycket tid att
@@ -102,6 +106,29 @@ visa_kontroller(skrap)
 Den skriver ut en lättläst lista över alla dropdown-listor, klickbara
 element och inmatningsfält på sidan, inklusive färdiga exempelanrop att
 kopiera in i ditt skript.
+
+### Klicka robust på ostabila sidor
+
+Byter en sida ibland identifierare mellan körningar (t.ex. en hashad
+CSS-klass som genereras om vid varje driftsättning, eller text som
+inte alltid är unik), kan du ge flera kandidat-identifierare istället
+för en - `klicka_robust()` provar dem i tur och ordning och klickar på
+den första som hittas:
+
+```r
+klicka_robust(skrap, list(
+  list(typ = "css", css = "#visa-knapp"),              # provas forst
+  list(typ = "css", css = '[aria-label="Visa"]'),      # sedan denna
+  list(typ = "text", text = "Visa")                    # sist denna
+))
+```
+
+Den skriver ut (`message()`) vilken kandidat som faktiskt träffade.
+Kör skriptet några gånger och ser att samma kandidat alltid vinner?
+Trimma då bort resten och ersätt raden med en enkel
+`klicka_via_id()`/`klicka_via_text()`-rad istället - ingen anledning
+att släpa med kandidater som ändå aldrig används.
+
 
 ### Ladda ner filer
 

@@ -1060,6 +1060,208 @@ klicka_via_id <- function(skrap, css, vanta = TRUE, grace = 0.3, timeout = 30,
   invisible(TRUE)
 }
 
+#' Bygg klick-JS för en enskild kandidat åt klicka_robust() (intern)
+#'
+#' @param kandidat En lista med `typ` ("css", "text" eller "klass_text") och
+#'   de fält den typen kräver - se klicka_robust().
+#' @param iframe Vidarebefordras till bygg_dokument_js().
+#' @return En JS-sträng som returnerar TRUE om kandidaten hittades och
+#'   klickades, annars FALSE.
+bygg_klick_js_for_kandidat <- function(kandidat, iframe) {
+  rlang::check_installed("jsonlite")
+  dok <- bygg_dokument_js(iframe)
+
+  if (identical(kandidat$typ, "css")) {
+    return(sprintf(
+      "(function(){
+         %s
+         var el = dok.querySelector(%s);
+         if (!el) return false;
+         window.__skrapKlickMarkering = true;
+         el.click();
+         return true;
+       })()",
+      dok, jsonlite::toJSON(kandidat$css, auto_unbox = TRUE)
+    ))
+  }
+  if (identical(kandidat$typ, "text")) {
+    selector <- kandidat$selector
+    if (is.null(selector)) {
+      selector <- "a, button, input[type=button], input[type=submit], label"
+    }
+    return(sprintf(
+      "(function(){
+         %s
+         var els = dok.querySelectorAll(%s);
+         for (var i = 0; i < els.length; i++) {
+           if (els[i].textContent.trim() === %s) {
+             window.__skrapKlickMarkering = true;
+             els[i].click();
+             return true;
+           }
+         }
+         return false;
+       })()",
+      dok, jsonlite::toJSON(selector, auto_unbox = TRUE),
+      jsonlite::toJSON(kandidat$text, auto_unbox = TRUE)
+    ))
+  }
+  if (identical(kandidat$typ, "klass_text")) {
+    tag <- if (is.null(kandidat$tag)) "div" else kandidat$tag
+    return(sprintf(
+      "(function(){
+         %s
+         var els = dok.querySelectorAll(%s);
+         for (var i = 0; i < els.length; i++) {
+           if (els[i].classList.contains(%s) && els[i].textContent.trim() === %s) {
+             window.__skrapKlickMarkering = true;
+             els[i].click();
+             return true;
+           }
+         }
+         return false;
+       })()",
+      dok, jsonlite::toJSON(tag, auto_unbox = TRUE),
+      jsonlite::toJSON(kandidat$klass, auto_unbox = TRUE),
+      jsonlite::toJSON(kandidat$text, auto_unbox = TRUE)
+    ))
+  }
+
+  stop(
+    "Okand kandidattyp: '", kandidat$typ, "' - giltiga typer ar ",
+    "'css', 'text' och 'klass_text'."
+  )
+}
+
+#' Beskriv en klicka_robust()-kandidat i klartext (intern)
+#'
+#' @param kandidat Se bygg_klick_js_for_kandidat().
+#' @return En kort textbeskrivning, för loggning/felmeddelanden.
+beskriv_kandidat <- function(kandidat) {
+  if (identical(kandidat$typ, "css")) {
+    return(sprintf("css-selektor '%s'", kandidat$css))
+  }
+  if (identical(kandidat$typ, "text")) {
+    return(sprintf("text '%s'", kandidat$text))
+  }
+  if (identical(kandidat$typ, "klass_text")) {
+    tag <- if (is.null(kandidat$tag)) "div" else kandidat$tag
+    return(sprintf("klass '%s' + text '%s' (tagg '%s')", kandidat$klass, kandidat$text, tag))
+  }
+  "okand kandidattyp"
+}
+
+#' Klicka på ett element via flera kandidat-identifierare, i turordning
+#'
+#' Bygger vidare på klicka_via_id()/klicka_via_text()/
+#' klicka_via_klass_och_text(), men istället för att satsa på EN
+#' identifierare provas en lista av kandidater i den ordning du ger dem -
+#' den första som hittas och går att klicka på används, och resten
+#' hoppas över. Tänkt för sidor där den "bästa" identifieraren (t.ex. ett
+#' id) ibland saknas eller slutar fungera (CSS-klasser som hashas om vid
+#' en driftsättning, text som inte alltid är unik, en DOM-sökväg som
+#' skiftar) - ge flera kandidater i fallande tillförlitlighet så klarar
+#' sig skriptet även om den starkaste inte råkar finnas just den här
+#' gången.
+#'
+#' Varje kandidat är en lista med ett `typ`-fält:
+#' - `list(typ = "css", css = "...")` - en CSS-selektor (id, attribut som
+#'   `[aria-label="..."]`/`[title="..."]`, eller en DOM-sökväg).
+#' - `list(typ = "text", text = "...", selector = NULL)` - exakt synlig
+#'   text, inom valfri `selector` (default som klicka_via_text()).
+#' - `list(typ = "klass_text", klass = "...", text = "...", tag = "div")` -
+#'   CSS-klass OCH exakt text, som klicka_via_klass_och_text().
+#'
+#' Skriver ut (via `message()`) vilken kandidat som faktiskt träffade -
+#' kör du skriptet några gånger och ser att det alltid är kandidat 1 som
+#' vinner, kan du med gott samvete trimma bort resten och ersätta anropet
+#' med en enklare klicka_via_id()/klicka_via_text()-rad. Används INTE
+#' kandidat 1 varnar funktionen (`varna_om_fallback`) - ett tecken på att
+#' sidan börjat bli instabil på just det stället och är värt att undersöka,
+#' även om skriptet själv klarade sig den här gången.
+#'
+#' @param skrap Ett objekt skapat av starta_skrapsession().
+#' @param kandidater En lista av kandidater, se ovan - prövas i given
+#'   ordning.
+#' @param vanta Om en eventuell sidladdning ska väntas in. Default TRUE.
+#' @param grace Respitperiod i sekunder, se klicka_via_id().
+#' @param timeout Max antal sekunder att vänta på att en sidladdning blir
+#'   klar, EFTER ett lyckat klick.
+#' @param timeout_per_kandidat Max antal sekunder att vänta på att VARJE
+#'   enskild kandidat dyker upp, innan nästa provas. Default 5 - lägre än
+#'   motsvarande ensam-funktioners default (10), eftersom en kandidat som
+#'   inte finns ska hinna ge vika för nästa utan att den sammanlagda
+#'   väntetiden (kandidater × timeout_per_kandidat i värsta fall) blir
+#'   orimligt lång.
+#' @param dom_stabil_tid Vidarebefordras till vanta_pa_sidladdning() - se
+#'   dokumentationen där.
+#' @param iframe Valfri CSS-selektor (eller vektor för nästlade iframes)
+#'   till en iframe elementet ligger i - delas av ALLA kandidater, eftersom
+#'   de antas peka på samma fysiska element i samma dokument.
+#' @param varna_om_fallback Om TRUE (default), skriv en varning
+#'   (`warning()`) om den första kandidaten INTE var den som träffade -
+#'   ett tecken på att sidan blivit instabil just där.
+#'
+#' @return Index (osynligt) för den kandidat som träffade. Kastar fel om
+#'   ingen av kandidaterna gick att klicka på.
+#'
+#' @examples
+#' \dontrun{
+#' klicka_robust(skrap, list(
+#'   list(typ = "css", css = "#visa-knapp"),
+#'   list(typ = "css", css = '[aria-label="Visa"]'),
+#'   list(typ = "text", text = "Visa")
+#' ))
+#' }
+#' @export
+klicka_robust <- function(skrap, kandidater, vanta = TRUE, grace = 0.3, timeout = 30,
+                          timeout_per_kandidat = 5, dom_stabil_tid = 0.3, iframe = NULL,
+                          varna_om_fallback = TRUE) {
+  if (!inherits(skrap, "skrapsession")) {
+    stop("Objektet ar inte skapat av starta_skrapsession().")
+  }
+  if (!is.list(kandidater) || length(kandidater) == 0) {
+    stop("kandidater maste vara en icke-tom lista av kandidat-beskrivningar.")
+  }
+
+  traff_index <- NULL
+  for (i in seq_along(kandidater)) {
+    js <- bygg_klick_js_for_kandidat(kandidater[[i]], iframe)
+    hittad <- vanta_pa_klicktraff(skrap, js, timeout_finns = timeout_per_kandidat)
+    if (isTRUE(hittad)) {
+      traff_index <- i
+      break
+    }
+  }
+
+  if (is.null(traff_index)) {
+    beskrivningar <- vapply(kandidater, beskriv_kandidat, character(1))
+    stop(
+      "Hittade inget klickbart element - provade ", length(kandidater),
+      " kandidat(er) i tur och ordning:\n  - ",
+      paste(beskrivningar, collapse = "\n  - ")
+    )
+  }
+
+  message(
+    "[klicka_robust] Kandidat ", traff_index, " av ", length(kandidater),
+    " traffade: ", beskriv_kandidat(kandidater[[traff_index]])
+  )
+  if (isTRUE(varna_om_fallback) && traff_index > 1) {
+    warning(
+      "klicka_robust(): forstahandskandidaten fungerade INTE - foll tillbaka ",
+      "pa kandidat ", traff_index, " (", beskriv_kandidat(kandidater[[traff_index]]),
+      "). Vart att undersoka om sidan andrats.",
+      call. = FALSE
+    )
+  }
+
+  if (isTRUE(vanta)) {
+    vanta_pa_sidladdning(skrap, grace = grace, timeout = timeout, dom_stabil_tid = dom_stabil_tid)
+  }
+  invisible(traff_index)
+}
+
 #' Vänta tills ett JavaScript-villkor blir sant
 #'
 #' Kompletterar elem_expect()/is_visible, som bara kontrollerar DOM-tillstånd

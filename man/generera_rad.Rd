@@ -13,12 +13,19 @@ generera_rad(rad)
 En textrad med R-kod, eller NA om händelsen ska hoppas över.
 }
 \description{
-Prioritetsordning: id först (unikt per HTML-spec), därefter aria-label
-(om unikt på sidan) - avgörande för ikonknappar utan synlig text, som
-annars bara kan identifieras via den bräckliga DOM-sökvägen - därefter
-den svagaste identifieraren som vid inspelningstillfället faktiskt
-bekräftats vara unik på sidan (text ensamt, sedan klass+text) - annars
-kor_js() med den inspelade DOM-sökvägen som sista utväg. Svelte-typ
+För klick: samlar ALLA identifierare som faktiskt bekräftades vara
+unika vid inspelningstillfället (inte bara den "bästa") i fallande
+tillförlitlighetsordning - id (unikt per HTML-spec), aria-label,
+title (båda avgörande för ikonknappar utan synlig text, och ofta
+stabilare än genererade CSS-klasser som t.ex. Material-UI kan hasha
+om mellan driftsättningar), unik text, unik klass+text, och till sist
+den inspelade DOM-sökvägen (garanterat unik, men känslig för att
+positionen kan skifta mellan inspelning och körning). Finns bara EN
+kandidat genereras en enkel, fristående rad
+(klicka_via_id()/klicka_via_text()/klicka_via_klass_och_text()).
+Finns FLERA genereras istället en klicka_robust()-rad som provar dem i
+tur och ordning vid körning - se klicka_robust() för hur man senare
+trimmar bort kandidater som visar sig onödiga. Svelte-typ
 "scoped"-klasser (t.ex. "svelte-zhv9wr") filtreras bort eftersom de är
 instabila mellan builds.
 }
