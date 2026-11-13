@@ -242,30 +242,61 @@ test_internetanslutning <- function(url = "https://raw.githubusercontent.com", t
 #' renderbara yta via `Page.getLayoutMetrics()`, och stänga sessionen
 #' igen - utan att röra den session som själva skrapningen sedan använder.
 #'
+#' Att maximera fönstret (`--start-maximized`) är en ASYNKRON OS-operation
+#' - den är inte nödvändigtvis klar i samma ögonblick som CDP-anslutningen
+#' upprättas. En enda mätning direkt vid anslutning riskerar därför att
+#' fånga fönstret mitt i maximeringen och låsa fast viewporten vid en för
+#' liten storlek (exakt samma symptom som utan auto-matchning alls -
+#' innehåll klipps av, t.ex. en dialogruta som inte går att scrolla klart
+#' i). Mäter därför upprepade gånger tills storleken slutar ändras (två
+#' identiska mätningar i rad) innan den används, istället för att lita på
+#' den första avläsningen.
+#'
 #' @param chrom Ett Chromote-objekt (fältet `chrom` i ett skrapsession-
 #'   objekt, eller motsvarande under uppstart).
+#' @param forsok Max antal mätningar innan funktionen ger upp och
+#'   använder den senaste avläsningen, även om den inte hunnit stabiliseras.
+#' @param mellanrum Sekunder mellan varje mätning.
 #' @return En lista med `bredd`/`hojd` i pixlar.
-matcha_viewport_mot_fonster <- function(chrom) {
+matcha_viewport_mot_fonster <- function(chrom, forsok = 10, mellanrum = 0.2) {
   sess_tmp <- chrom$new_session()
   on.exit(try(sess_tmp$close(), silent = TRUE), add = TRUE)
 
   try(sess_tmp$Page$enable(), silent = TRUE)
-  metrics <- sess_tmp$Page$getLayoutMetrics()
 
-  # Faltnamnen har skiftat nagot mellan versioner av Chrome DevTools-
-  # protokollet (aldre: visualViewport/layoutViewport, nyare:
-  # cssVisualViewport/cssLayoutViewport) - forsok i tur och ordning.
-  vp <- metrics$cssVisualViewport %||% metrics$visualViewport %||%
-    metrics$cssLayoutViewport %||% metrics$layoutViewport
+  las_storlek <- function() {
+    metrics <- sess_tmp$Page$getLayoutMetrics()
 
-  bredd <- vp$clientWidth
-  hojd <- vp$clientHeight
-  if (is.null(bredd) || is.null(hojd) || !is.numeric(bredd) || !is.numeric(hojd) ||
-      bredd <= 0 || hojd <= 0) {
-    stop("Kunde inte lasa av webblasarfonstrets storlek via CDP.")
+    # Faltnamnen har skiftat nagot mellan versioner av Chrome DevTools-
+    # protokollet (aldre: visualViewport/layoutViewport, nyare:
+    # cssVisualViewport/cssLayoutViewport) - forsok i tur och ordning.
+    vp <- metrics$cssVisualViewport %||% metrics$visualViewport %||%
+      metrics$cssLayoutViewport %||% metrics$layoutViewport
+
+    list(bredd = vp$clientWidth, hojd = vp$clientHeight)
   }
 
-  list(bredd = round(bredd), hojd = round(hojd))
+  giltig <- function(m) {
+    !is.null(m$bredd) && !is.null(m$hojd) && is.numeric(m$bredd) &&
+      is.numeric(m$hojd) && m$bredd > 0 && m$hojd > 0
+  }
+
+  forra <- NULL
+  for (i in seq_len(forsok)) {
+    nu <- las_storlek()
+    if (!giltig(nu)) {
+      stop("Kunde inte lasa av webblasarfonstrets storlek via CDP.")
+    }
+    if (!is.null(forra) && identical(forra, nu)) {
+      return(list(bredd = round(nu$bredd), hojd = round(nu$hojd)))
+    }
+    forra <- nu
+    Sys.sleep(mellanrum)
+  }
+
+  # Stabiliserades aldrig inom forsok-budgeten - anvand sista avlasningen
+  # anda (battre an att krascha, och med stor sannolikhet korrekt redan).
+  list(bredd = round(forra$bredd), hojd = round(forra$hojd))
 }
 
 #' Starta en skrapsession (Edge + chromote + selenider)
